@@ -8,10 +8,11 @@ from piper_on_bunker.models import Observation, Pose, Target
 
 
 class MarkerDetector:
-    def __init__(self, marker_id: Optional[int] = None, min_depth_m: float = 0.05, max_depth_m: float = 1.5) -> None:
+    def __init__(self, marker_id: Optional[int] = None, min_depth_m: float = 0.05, max_depth_m: float = 1.5, dictionary_name: str = "DICT_4X4_50") -> None:
         self.marker_id = marker_id
         self.min_depth_m = min_depth_m
         self.max_depth_m = max_depth_m
+        self.dictionary_name = dictionary_name
 
     def detect(self, observation: Observation, label: str) -> Optional[Target]:
         try:
@@ -22,12 +23,17 @@ class MarkerDetector:
         color = observation.metadata.get("_color_image")
         depth = observation.metadata.get("_depth_image")
         camera_matrix = observation.metadata.get("camera_matrix")
+        depth_encoding = observation.metadata.get("depth_encoding", "16UC1")
         if color is None or depth is None or not camera_matrix:
+            return None
+        if color.shape[:2] != depth.shape[:2]:
             return None
 
         gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
         aruco = cv2.aruco
-        dictionary = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+        if not hasattr(aruco, self.dictionary_name):
+            raise RuntimeError(f"Unknown ArUco dictionary: {self.dictionary_name}")
+        dictionary = aruco.getPredefinedDictionary(getattr(aruco, self.dictionary_name))
         params = aruco.DetectorParameters()
         if hasattr(aruco, "ArucoDetector"):
             corners, ids, _ = aruco.ArucoDetector(dictionary, params).detectMarkers(gray)
@@ -45,7 +51,7 @@ class MarkerDetector:
         pts = corners[selected][0]
         cx = int(round(float(pts[:, 0].mean())))
         cy = int(round(float(pts[:, 1].mean())))
-        depth_m = self._median_depth_m(depth, cx, cy)
+        depth_m = self._median_depth_m(depth, cx, cy, depth_encoding)
         if depth_m is None:
             return None
         fx, fy, ppx, ppy = float(camera_matrix[0]), float(camera_matrix[4]), float(camera_matrix[2]), float(camera_matrix[5])
@@ -56,9 +62,9 @@ class MarkerDetector:
         perimeter = float(cv2.arcLength(pts.astype("float32"), True))
         confidence = max(0.0, min(1.0, perimeter / 400.0))
         pose = Pose(x=x, y=y, z=depth_m, frame_id=observation.frame_id)
-        return Target(label=label, confidence=confidence, pixel=(cx, cy), camera_pose=pose, base_pose=None)
+        return Target(label=label, confidence=confidence, pixel=(cx, cy), depth_m=depth_m, camera_pose=pose, base_pose=None)
 
-    def _median_depth_m(self, depth, cx: int, cy: int) -> Optional[float]:
+    def _median_depth_m(self, depth, cx: int, cy: int, depth_encoding: str) -> Optional[float]:
         import numpy as np
 
         height, width = depth.shape[:2]
@@ -69,8 +75,12 @@ class MarkerDetector:
         if values.size == 0:
             return None
         median = float(np.median(values))
-        if median > 10.0:
+        if depth_encoding == "16UC1":
             median /= 1000.0
+        elif depth_encoding == "32FC1":
+            pass
+        else:
+            raise RuntimeError(f"Unsupported depth encoding: {depth_encoding}")
         if median < self.min_depth_m or median > self.max_depth_m:
             return None
         return median

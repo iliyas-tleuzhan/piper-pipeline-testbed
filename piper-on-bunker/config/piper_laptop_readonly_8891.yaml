@@ -1,0 +1,10 @@
+mode: readonly_8891
+physical_motion_enabled: false
+arm_adapter: abotclaw_api
+camera_adapter: mock
+base_adapter: mock
+action_server_url: http://localhost:8891
+logging:
+  enabled: true
+  directory: piper-on-bunker/logs
+  format: jsonl

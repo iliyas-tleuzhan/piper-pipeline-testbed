@@ -16,3 +16,25 @@ Before motion:
 6. Keep `local_activation.physical_motion_enabled: false` until dry-run and operator approval.
 
 The committed hardware config keeps `physical_motion_enabled: false`.
+
+Current discovered hardware values:
+
+- Complete mission backend: `arm_adapter: piper_ros`.
+- Restricted 8891 backend: health/state and bounded nudge/gripper experiments only.
+- MoveIt planning frame: `dummy_link`.
+- Camera frame: `table_camera_color_optical_frame`.
+- Active arm joints: `joint1..joint6`.
+
+Full live dry-run command:
+
+```bash
+cd ~/piper-pipeline-testbed
+docker exec -it abot-piper-noetic bash -lc '
+  cd /tmp/piper-pipeline-testbed-live &&
+  source /opt/ros/noetic/setup.bash &&
+  source /root/ABot-Claw/robot_layer/arm_piper/agent_server/robot_driver_ros/devel/setup.bash &&
+  export ROS_MASTER_URI=http://localhost:11311 ROS_HOSTNAME=localhost &&
+  export PYTHONPATH=$PWD/piper-on-bunker/src:$PYTHONPATH &&
+  python3 -m piper_on_bunker.cli live-dry-run --config piper-on-bunker/config/piper_laptop_dry_run.yaml
+'
+```

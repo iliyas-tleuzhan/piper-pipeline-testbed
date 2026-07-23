@@ -1,6 +1,6 @@
 # Live Hardware Audit
 
-Audit date: 2026-07-23.
+Audit date: 2026-07-23. Updated after CAN, ROS, and RealSense follow-up.
 
 ## Environment
 
@@ -18,13 +18,22 @@ The container was started for read-only Python/ROS inspection only. No ROS stack
 
 ## Live Hardware Visibility
 
-- `can0`: not present during audit, so state and bitrate were not verified.
-- Running Docker containers at first check: none.
-- `8891 /health`: connection refused.
-- `8891 /state`: connection refused.
-- ROS master in container: not running.
-- `/joint_states_single`, `/end_pose`, table camera topics, TF tree: not live-verified.
-- USB: no Intel RealSense device was enumerated by `lsusb`; the integrated Bison camera was visible.
+- `can0`: present, `UP`, `LOWER_UP`, `ERROR-ACTIVE`, bitrate `1000000`, zero bus errors.
+- Passive `candump -L can0`: continuous PiPER CAN traffic observed, including IDs `2A1..2A8` and `251..256`.
+- USB CAN adapter: OpenMoko/Geschwister Schneider CAN adapter via `gs_usb`.
+- RealSense D555: enumerated as Intel RealSense D555 serial `352222303634`, firmware `7.56.37776.6014`.
+- ROS lower stack: started with existing ABot-Claw infrastructure script; no mission or motion command was run.
+- `8891 /health`: success after starting the restricted action server; `robot_initialized=false`.
+- `8891 /state`: success; live joints matched `/joint_states_single`.
+- `/joint_states_single`: live `sensor_msgs/JointState`, names `joint1..joint6, gripper`.
+- `/end_pose`: live `geometry_msgs/PoseStamped`.
+- Table camera topics: live `sensor_msgs/Image` color/depth and `sensor_msgs/CameraInfo`.
+- MoveIt services: live, type `moveit_ctrl/JointMoveitCtrl`.
+- MoveIt planning frame: `dummy_link`.
+- End-effector link: `gripper_tcp`.
+- Active MoveIt arm joints: `joint1..joint6`.
+- TF: `dummy_link -> base_link` is identity. No live TF from `table_camera_color_optical_frame` to the arm planning tree was available.
+- Live dry-run result: real state and camera observation succeeded, no-motion MoveIt request previews were generated, but ArUco target detection returned `TARGET_NOT_FOUND`.
 
 ## ABot-Claw 8891 API Found In Source
 
@@ -62,7 +71,33 @@ Expected service names:
 - `/joint_moveit_ctrl_gripper`
 - `/joint_moveit_ctrl_piper`
 
-These were found in source but not verified live because ROS master was not running.
+These were found in source and verified live after starting the lower stack.
+
+## Live Camera Result
+
+CameraInfo:
+
+- Frame: `table_camera_color_optical_frame`
+- Resolution: `1280x720`
+- Intrinsics: `fx=638.4649`, `fy=638.4649`, `ppx=628.1332`, `ppy=364.4467`
+- Depth encoding observed through the Python publisher: `16UC1`
+
+A temporary frame was inspected at `/tmp/table_camera_latest.jpg`. It showed the tabletop and PiPER arm, but no detectable ArUco marker. A dictionary sweep over the frame found no ArUco detections.
+
+## Startup Checklist
+
+Read-only/live dry-run sequence:
+
+1. Confirm `can0`: `ip -details -statistics link show can0`.
+2. Confirm passive CAN traffic: `timeout 5 candump -L can0`.
+3. Confirm RealSense USB: `rs-enumerate-devices -s`.
+4. Start lower stack only: `PIPER_TMUX_ATTACH=0 ~/ABot-Claw/start_abotclaw_all.sh --lower-only --no-attach`.
+5. Verify topics: `rostopic list`.
+6. Verify services: `rosservice list`.
+7. Verify 8891 read-only: `curl http://localhost:8891/health` and `curl http://localhost:8891/state`.
+8. Verify camera-only capture.
+9. Place the configured ArUco marker visibly in the camera view.
+10. Run full live dry-run.
 
 ## Startup Scripts Found
 
@@ -74,5 +109,5 @@ These were found in source but not verified live because ROS master was not runn
 ## Implementation Levels
 
 - Implemented and unit-tested: strict 8891 adapter, gated ROS MoveIt adapter, RealSense ROS subscriber, ArUco detector, static transform utility, local named-pose calibration, safety checks, JSONL logging, restricted agent API, dual-arm mock.
-- Verified read-only on real laptop: host/container runtime, ABot-Claw source contracts, container mount, absence of `can0`, absence of running 8891, absence of enumerated RealSense.
+- Verified read-only on real laptop: host/container runtime, ABot-Claw source contracts, container mount, `can0`, passive CAN traffic, RealSense USB, ROS topics/services, MoveIt planning frame, 8891 health/state, camera frame capture.
 - Physically executed successfully: none.

@@ -18,8 +18,12 @@ named_poses:
   safe_recovery: null
 transforms:
   table_camera_color_optical_frame_to_piper_base:
+    source_frame: table_camera_color_optical_frame
+    target_frame: dummy_link
     translation_m: null
     quaternion_xyzw: null
+    recorded_at: null
+    max_age_s: 300.0
 safety:
   workspace_bounds_m:
     x: [0.15, 0.55]

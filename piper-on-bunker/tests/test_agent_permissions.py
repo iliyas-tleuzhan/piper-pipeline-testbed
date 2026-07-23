@@ -9,7 +9,7 @@ def test_agent_allows_high_level_mission():
     mapper = CommandMapper(MissionSupervisor(MockArm(), MockCamera()))
     result = mapper.map_command("run_button_mission")()
     assert not result.success
-    assert result.status_code == StatusCode.VERIFICATION_FAILURE
+    assert result.status_code == StatusCode.WAITING_FOR_VERIFICATION
 
 
 def test_agent_denies_raw_commands():

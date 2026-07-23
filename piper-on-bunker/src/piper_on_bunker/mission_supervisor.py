@@ -11,11 +11,11 @@ from piper_on_bunker.models import ArmMode, Observation, SkillResult, StatusCode
 from piper_on_bunker.policies.moveit_policy import MoveItPolicy
 from piper_on_bunker.resource_manager import ResourceManager
 from piper_on_bunker.safety import validate_named_pose, validate_workspace
-from piper_on_bunker.transforms import require_base_pose
+from piper_on_bunker.transforms import TransformResolver, require_base_pose
 
 
 class MissionSupervisor:
-    def __init__(self, arm, camera, base=None, owner: str = "mission", logger=None, safety=None) -> None:
+    def __init__(self, arm, camera, base=None, owner: str = "mission", logger=None, safety=None, transform_resolver=None, planning_frame: str = "piper_base", mode: str = "mock", physical_motion_enabled: bool = False) -> None:
         self.arm = arm
         self.camera = camera
         self.base = base or MockBase()
@@ -23,12 +23,18 @@ class MissionSupervisor:
         self.resources = ResourceManager()
         self.logger = logger or MissionLogger()
         self.safety = safety or {}
+        self.transform_resolver = transform_resolver or TransformResolver({})
+        self.planning_frame = planning_frame
+        self.mode = mode
+        self.physical_motion_enabled = physical_motion_enabled
         self.state = ArmStateMachine()
         self.policy = MoveItPolicy()
         self.last_observation = None
         self.last_target = None
         self.verification_should_pass = True
         self.manual_verification_ack = False
+        self.manual_verification_rejected = False
+        self.current_mission_id = None
 
     def _ok(self, message: str, outputs: Optional[dict] = None) -> SkillResult:
         return SkillResult.build(True, StatusCode.OK, message, monotonic(), outputs)
@@ -105,6 +111,10 @@ class MissionSupervisor:
         if not self.last_target:
             return self._fail(StatusCode.TARGET_NOT_FOUND, "no target to estimate")
         try:
+            if self.last_target.base_pose is None:
+                if self.last_target.camera_pose is None:
+                    return self._fail(StatusCode.INVALID_TRANSFORM, "target lacks a camera-frame pose")
+                self.last_target.base_pose = self.transform_resolver.transform_pose(self.last_target.camera_pose, self.planning_frame)
             pose = require_base_pose(self.last_target.base_pose)
         except ValueError as exc:
             return self._fail(StatusCode.INVALID_TRANSFORM, str(exc))
@@ -125,6 +135,11 @@ class MissionSupervisor:
             return self._fail(StatusCode.TARGET_NOT_FOUND, "no target")
         self.state.transition(ArmMode.PRE_MANIPULATION)
         pose = self.policy.pre_contact_pose(require_base_pose(self.last_target.base_pose))
+        try:
+            self._validate_motion_prerequisites(target_dependent=True)
+            self._validate_distance(require_base_pose(self.last_target.base_pose), pose, "max_pre_contact_distance_m")
+        except ValueError as exc:
+            return self._fail(StatusCode.SAFETY_VIOLATION, str(exc))
         return self.arm.move_to_pose(pose)
 
     def visual_servo_to_target(self) -> SkillResult:
@@ -144,6 +159,10 @@ class MissionSupervisor:
                 return detect
         if not self.base.is_base_stopped():
             return self._fail(StatusCode.BASE_NOT_LOCKED, "base must be locked before pressing target")
+        try:
+            self._validate_motion_prerequisites(target_dependent=True)
+        except ValueError as exc:
+            return self._fail(StatusCode.SAFETY_VIOLATION, str(exc))
         self.state.transition(ArmMode.MANIPULATION)
         return self.arm.press(require_base_pose(self.last_target.base_pose), depth_m=0.015)
 
@@ -155,16 +174,33 @@ class MissionSupervisor:
         return self.arm.retract()
 
     def verify_task(self) -> SkillResult:
+        if self.manual_verification_rejected:
+            self.state.transition(ArmMode.VERIFYING)
+            return self._fail(StatusCode.VERIFICATION_FAILURE, "manual verification rejected")
+        if not self.manual_verification_ack:
+            self.state.transition(ArmMode.WAITING_FOR_VERIFICATION)
+            return SkillResult.build(
+                False,
+                StatusCode.WAITING_FOR_VERIFICATION,
+                "WAITING_FOR_VERIFICATION",
+                monotonic(),
+                {"mission_id": self.current_mission_id, "prompt": "Did the button press succeed? [y/N]"},
+            )
         self.state.transition(ArmMode.VERIFYING)
         if not self.verification_should_pass:
             return self._fail(StatusCode.VERIFICATION_FAILURE, "verification failed")
-        if not self.manual_verification_ack:
-            return self._fail(StatusCode.VERIFICATION_FAILURE, "manual verification has not been acknowledged")
         return self._ok("manual verification acknowledged")
 
     def acknowledge_manual_verification(self) -> SkillResult:
         self.manual_verification_ack = True
+        self.manual_verification_rejected = False
         return self._ok("manual verification acknowledgement recorded")
+
+    def reject_manual_verification(self) -> SkillResult:
+        self.manual_verification_ack = False
+        self.manual_verification_rejected = True
+        self.verification_should_pass = False
+        return self._ok("manual verification rejection recorded")
 
     def return_to_navigation_view(self) -> SkillResult:
         self.state.transition(ArmMode.NAVIGATION_VIEW)
@@ -183,6 +219,8 @@ class MissionSupervisor:
 
     def run_button_mission(self, label: str = "marked_button") -> SkillResult:
         mission_id = str(uuid4())
+        self.current_mission_id = mission_id
+        self.logger.start_mission(mission_id)
         if not self.resources.acquire("arm", self.owner):
             return self._fail(StatusCode.RESOURCE_BUSY, "arm resource is busy")
         steps = [
@@ -201,7 +239,7 @@ class MissionSupervisor:
             self.return_to_navigation_view,
         ]
         history = []
-        self.logger.append({"mission_id": mission_id, "event": "mission_started", "label": label})
+        self.logger.append({"mission_id": mission_id, "event": "mission_started", "label": label, "mode": self.mode, "physical_motion_enabled": self.physical_motion_enabled})
         try:
             for step in steps:
                 step_name = getattr(step, "__name__", "detect_target")
@@ -212,14 +250,13 @@ class MissionSupervisor:
                 history.append(event)
                 self.logger.append(event)
                 if not result.success:
-                    self.arm.stop()
-                    if self.state.mode != ArmMode.ESTOP:
-                        try:
-                            self.retract_arm()
-                            self.recover_to_safe_pose()
-                        except Exception:
-                            pass
+                    if result.status_code == StatusCode.WAITING_FOR_VERIFICATION:
+                        final = SkillResult.build(False, result.status_code, "mission waiting for manual verification", monotonic(), {"mission_id": mission_id, "history": history, "prompt": "Did the button press succeed? [y/N]"})
+                        self.logger.append({"mission_id": mission_id, "event": "waiting_for_verification"})
+                        return final
+                    recovery = self._maybe_recover_after_failure(result)
                     final = SkillResult.build(False, result.status_code, f"mission failed at {step_name}", monotonic(), {"mission_id": mission_id, "history": history})
+                    final.recovery = recovery
                     self.logger.append({"mission_id": mission_id, "event": "mission_failed", "status_code": result.status_code.value})
                     return final
             self.base.unlock_base()
@@ -228,6 +265,48 @@ class MissionSupervisor:
             return final
         finally:
             self.resources.release("arm", self.owner)
+
+    def _maybe_recover_after_failure(self, result: SkillResult):
+        from piper_on_bunker.models import RecoveryInfo
+
+        unsafe = {
+            StatusCode.CONTROLLER_FAILURE,
+            StatusCode.STALE_STATE,
+            StatusCode.POSE_NOT_REACHED,
+            StatusCode.ESTOP,
+            StatusCode.NOT_IMPLEMENTED,
+        }
+        if result.status_code in unsafe:
+            self.state.transition(ArmMode.FAULT)
+            self.logger.append({"mission_id": self.current_mission_id, "event": "recovery_skipped", "reason": result.status_code.value})
+            return RecoveryInfo(attempted=False, action="operator_intervention_required", success=False)
+        recoverable = {StatusCode.TARGET_NOT_FOUND, StatusCode.INVALID_TRANSFORM, StatusCode.SAFETY_VIOLATION, StatusCode.VERIFICATION_FAILURE}
+        if result.status_code not in recoverable:
+            return RecoveryInfo(attempted=False, action="not_classified_recoverable", success=False)
+        self.logger.append({"mission_id": self.current_mission_id, "event": "recovery_skipped", "reason": "no_auto_motion_after_failure"})
+        self.state.transition(ArmMode.FAULT)
+        return RecoveryInfo(attempted=False, action="operator_review_required", success=False)
+
+    def _validate_motion_prerequisites(self, target_dependent: bool) -> None:
+        if self.physical_motion_enabled and not self.base.is_base_stopped():
+            raise ValueError("base must be locked before physical motion")
+        if hasattr(self.arm, "validate_live_state"):
+            state_result = self.arm.validate_live_state()
+            if not state_result.success:
+                raise ValueError(state_result.message)
+        if target_dependent and self.last_observation:
+            age = float(self.last_observation.metadata.get("color_age_s", 0.0))
+            max_age = float(self.safety.get("max_camera_age_s", 1.0))
+            if age > max_age:
+                raise ValueError(f"camera observation is stale: age_s={age:.3f} max_age_s={max_age:.3f}")
+
+    def _validate_distance(self, a, b, limit_name: str) -> None:
+        limit = self.safety.get(limit_name)
+        if limit is None:
+            return
+        distance = ((float(a.x) - float(b.x)) ** 2 + (float(a.y) - float(b.y)) ** 2 + (float(a.z) - float(b.z)) ** 2) ** 0.5
+        if distance > float(limit):
+            raise ValueError(f"{limit_name} exceeded: distance_m={distance:.4f} limit_m={float(limit):.4f}")
 
     def _json_safe(self, value):
         if isinstance(value, dict):

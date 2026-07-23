@@ -17,11 +17,18 @@ class PipelineConfig:
     action_server_url: str = "http://localhost:8891"
     named_poses: dict = field(default_factory=dict)
     safety: dict = field(default_factory=dict)
+    transforms: dict = field(default_factory=dict)
+    logging: dict = field(default_factory=dict)
+    expected_joint_names: list = field(default_factory=list)
     local_activation: dict = field(default_factory=dict)
     replay_fixture: Optional[str] = None
 
     def validate(self) -> None:
+        if self.mode in {"dry_run", "live_dry_run"} and self.physical_motion_enabled:
+            raise ValueError("dry-run configurations may never enable physical motion")
         if self.mode in {"hardware", "piper_laptop_hardware"} and self.physical_motion_enabled:
+            if self.arm_adapter != "piper_ros":
+                raise ValueError("Complete hardware mission requires arm_adapter: piper_ros")
             local_enabled = bool(self.local_activation.get("physical_motion_enabled", False))
             if not local_enabled:
                 raise ValueError("Physical motion requires ignored local activation")
@@ -32,6 +39,8 @@ class PipelineConfig:
             bounds = self.safety.get("workspace_bounds_m", {})
             if not all(axis in bounds for axis in ("x", "y", "z")):
                 raise ValueError("Physical motion requires configured workspace_bounds_m")
+            if not self.transforms:
+                raise ValueError("Physical motion requires a configured camera-to-PiPER transform")
         if self.arm_adapter in {"piper_ros", "abotclaw_api"} and self.mode == "mock":
             raise ValueError("Hardware arm adapters are not allowed in mock mode")
         if self.mode != "mock" and self.arm_adapter == "mock" and self.physical_motion_enabled:
@@ -83,6 +92,9 @@ def load_config(path: str | Path) -> PipelineConfig:
         action_server_url=raw.get("action_server_url", "http://localhost:8891"),
         named_poses=raw.get("named_poses", {}),
         safety=raw.get("safety", {}),
+        transforms=raw.get("transforms", {}),
+        logging=raw.get("logging", {}),
+        expected_joint_names=raw.get("expected_joint_names", []),
         local_activation=local_activation,
         replay_fixture=raw.get("replay_fixture"),
     )

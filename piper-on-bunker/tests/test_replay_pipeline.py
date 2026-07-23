@@ -6,7 +6,7 @@ def test_replay_mission():
     supervisor = build_supervisor_from_path("piper-on-bunker/config/tabletop_replay.yaml")
     result = supervisor.run_button_mission()
     assert not result.success
-    assert result.status_code == StatusCode.VERIFICATION_FAILURE
+    assert result.status_code == StatusCode.WAITING_FOR_VERIFICATION
 
 
 def test_replay_mission_with_manual_acknowledgement():

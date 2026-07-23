@@ -1,9 +1,10 @@
 mode: piper_laptop_hardware
 physical_motion_enabled: false
-arm_adapter: abotclaw_api
+arm_adapter: piper_ros
 camera_adapter: external_realsense
 base_adapter: mock
 action_server_url: http://localhost:8891
+expected_joint_names: [joint1, joint2, joint3, joint4, joint5, joint6]
 named_poses: {}
 safety:
   require_local_activation: true
@@ -14,4 +15,20 @@ safety:
   max_state_age_s: 1.0
   max_camera_age_s: 1.0
   max_transform_age_s: 5.0
+  max_color_depth_delta_s: 0.08
   command_timeout_s: 20.0
+  joint_tolerance_rad: 0.03
+  position_tolerance_m: 0.02
+  pose_reached_timeout_s: 5.0
+  max_pre_contact_distance_m: 0.10
+  max_approach_distance_m: 0.04
+  max_press_distance_m: 0.015
+  max_retract_distance_m: 0.08
+  max_speed_scaling: 0.10
+  aruco_marker_id: 582
+  aruco_dictionary: DICT_4X4_1000
+transforms: {}
+logging:
+  enabled: true
+  directory: piper-on-bunker/logs
+  format: jsonl

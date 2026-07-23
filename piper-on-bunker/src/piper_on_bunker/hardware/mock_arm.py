@@ -13,6 +13,7 @@ class MockArm:
         self.current_pose_name = "tabletop_home"
         self.stopped = False
         self.press_count = 0
+        self.actions = []
 
     def _result(self, action: str, ok_code: StatusCode = StatusCode.OK, outputs: Optional[dict] = None) -> SkillResult:
         start = monotonic()
@@ -37,26 +38,31 @@ class MockArm:
         return {"adapter": "mock", "pose": self.current_pose_name, "stopped": self.stopped, "press_count": self.press_count}
 
     def move_to_named_pose(self, name: str) -> SkillResult:
+        self.actions.append(("move_to_named_pose", name))
         result = self._result(name, outputs={"pose": name})
         if result.success:
             self.current_pose_name = name
         return result
 
     def move_to_pose(self, pose: Pose) -> SkillResult:
+        self.actions.append(("move_to_pose", pose))
         return self._result("move_to_pose", outputs={"pose": pose.__dict__})
 
     def press(self, pose: Pose, depth_m: float) -> SkillResult:
+        self.actions.append(("press", pose))
         result = self._result("press", outputs={"pose": pose.__dict__, "depth_m": depth_m})
         if result.success:
             self.press_count += 1
         return result
 
     def retract(self) -> SkillResult:
+        self.actions.append(("retract", None))
         result = self._result("retract", outputs={"pose": "retracted"})
         if result.success:
             self.current_pose_name = "retracted"
         return result
 
     def stop(self) -> SkillResult:
+        self.actions.append(("stop", None))
         self.stopped = True
         return SkillResult.build(True, StatusCode.ESTOP, "motion stopped", monotonic())

@@ -16,6 +16,7 @@ class ArmMode(str, Enum):
     PRE_MANIPULATION = "PRE_MANIPULATION"
     MANIPULATION = "MANIPULATION"
     VERIFYING = "VERIFYING"
+    WAITING_FOR_VERIFICATION = "WAITING_FOR_VERIFICATION"
     RETRACTING = "RETRACTING"
     FAULT = "FAULT"
     ESTOP = "ESTOP"
@@ -42,8 +43,11 @@ class StatusCode(str, Enum):
     STALE_IMAGE = "STALE_IMAGE"
     SAFETY_VIOLATION = "SAFETY_VIOLATION"
     VISUAL_SERVO_DISABLED_OPEN_LOOP = "VISUAL_SERVO_DISABLED_OPEN_LOOP"
+    WAITING_FOR_VERIFICATION = "WAITING_FOR_VERIFICATION"
     BASE_NOT_LOCKED = "BASE_NOT_LOCKED"
     INVALID_DEPTH = "INVALID_DEPTH"
+    POSE_NOT_REACHED = "POSE_NOT_REACHED"
+    OPERATOR_INTERVENTION_REQUIRED = "OPERATOR_INTERVENTION_REQUIRED"
     ERROR = "ERROR"
 
 
@@ -74,6 +78,7 @@ class Target:
     label: str
     confidence: float
     pixel: Optional[Tuple[int, int]] = None
+    depth_m: Optional[float] = None
     camera_pose: Optional[Pose] = None
     base_pose: Optional[Pose] = None
 

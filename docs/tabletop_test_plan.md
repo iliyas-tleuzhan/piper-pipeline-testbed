@@ -23,3 +23,10 @@ Before first physical motion:
 9. Ask the operator once before moving the physical arm.
 
 Physical tests were not performed in the 2026-07-23 implementation pass.
+
+The first physical movement remains blocked until:
+
+- A real calibrated `tabletop_home` is present in `piper_laptop_hardware.local.yaml`.
+- A valid camera-to-`dummy_link` transform is present in the same ignored file.
+- The marked ArUco button is visible and detected in live dry-run.
+- The live dry-run reaches `WAITING_FOR_VERIFICATION` with all MoveIt request previews marked `will_call_service: false`.

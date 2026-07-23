@@ -20,6 +20,10 @@ def test_verification_failure():
     supervisor = MissionSupervisor(MockArm(), MockCamera())
     result = supervisor.run_button_mission()
     assert not result.success
+    assert result.status_code == StatusCode.WAITING_FOR_VERIFICATION
+    supervisor.reject_manual_verification()
+    result = supervisor.verify_task()
+    assert not result.success
     assert result.status_code == StatusCode.VERIFICATION_FAILURE
 
 

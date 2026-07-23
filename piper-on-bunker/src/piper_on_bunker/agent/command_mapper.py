@@ -13,6 +13,8 @@ ALLOWED_AGENT_TOOLS = {
     "retract",
     "return_to_navigation_view",
     "run_button_mission",
+    "acknowledge_verification",
+    "reject_verification",
     "get_pipeline_status",
     "stop",
 }
@@ -44,6 +46,10 @@ class CommandMapper:
             return self.supervisor.return_to_navigation_view
         if lowered in {"run_button_mission", "button mission", "mission"}:
             return lambda: self.supervisor.run_button_mission(target)
+        if lowered in {"acknowledge_verification", "ack", "verification_ok"}:
+            return self.supervisor.acknowledge_manual_verification
+        if lowered in {"reject_verification", "verification_failed"}:
+            return self.supervisor.reject_manual_verification
         if lowered in {"get_pipeline_status", "status"}:
             return self.supervisor.get_robot_state
         if lowered in {"stop", "estop"}:

@@ -144,6 +144,9 @@ def build_action_preview_request(
 
 def parse_vlac_actions(raw_model_output: Any) -> List[StandardAction]:
     raw_text = raw_model_output if isinstance(raw_model_output, str) else json.dumps(raw_model_output, sort_keys=True)
+    vlac_prompt_action = _parse_vlac_prompt_action(raw_text, raw_model_output)
+    if vlac_prompt_action is not None:
+        return [vlac_prompt_action]
     parsed = _extract_json(raw_model_output)
     if parsed is not None:
         if isinstance(parsed, list) and all(isinstance(value, (int, float)) for value in parsed) and len(parsed) >= 6:
@@ -155,6 +158,29 @@ def parse_vlac_actions(raw_model_output: Any) -> List[StandardAction]:
     if len(numbers) >= 6:
         return [_numbers_to_action(numbers, raw_model_output)]
     return []
+
+
+def _parse_vlac_prompt_action(raw_text: str, raw_model_output: Any) -> Optional[StandardAction]:
+    pattern = re.compile(
+        r"x:\s*([-+0-9.eE]+)\s*mm,\s*y:\s*([-+0-9.eE]+)\s*mm,\s*z:\s*([-+0-9.eE]+)\s*mm,\s*"
+        r"roll:\s*([-+0-9.eE]+)\s*degrees,\s*pitch:\s*([-+0-9.eE]+)\s*degrees,\s*yaw:\s*([-+0-9.eE]+)\s*degrees,\s*open:\s*([-+0-9.eE]+)"
+    )
+    match = pattern.search(raw_text)
+    if match is None:
+        return None
+    values = [float(value) for value in match.groups()]
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("non-finite VLAC prompt action value")
+    return StandardAction(
+        translation_delta_m=[values[0] / 1000.0, values[1] / 1000.0, values[2] / 1000.0],
+        rotation_delta_rad=[math.radians(values[3]), math.radians(values[4]), math.radians(values[5])],
+        gripper_command=values[6],
+        model_name=MODEL_NAME,
+        raw_action=raw_model_output,
+        action_frame="unknown",
+        confidence="high",
+        execution_allowed=False,
+    )
 
 
 def _extract_json(raw: Any) -> Optional[Any]:

@@ -81,6 +81,17 @@ def test_parse_numeric_action_medium_confidence():
     assert action.gripper_command == -1
 
 
+def test_parse_vlac_prompt_units_to_standard_si():
+    action = parse_vlac_actions(
+        "{x: 0.1mm, y: 2.0mm, z: -3.0mm, roll: 1.0 degrees, pitch: -2.0 degrees, yaw: 3.0 degrees, open: 0.8}"
+    )[0]
+    assert action.confidence == "high"
+    assert action.translation_delta_m == pytest.approx([0.0001, 0.002, -0.003])
+    assert action.rotation_delta_rad == pytest.approx([math.radians(1.0), math.radians(-2.0), math.radians(3.0)])
+    assert action.gripper_command == pytest.approx(0.8)
+    assert action.execution_allowed is False
+
+
 def test_parse_failure():
     assert parse_vlac_actions("move left please") == []
 

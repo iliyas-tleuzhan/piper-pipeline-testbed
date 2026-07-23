@@ -1,8 +1,8 @@
 # VLAC Shadow Contract
 
-Remote audit status: blocked on SSH connectivity to `iliyas@master` and `iliyas@192.168.1.104` on July 23, 2026.
+Remote audit status: completed against `iliyas@192.168.1.104` on July 23, 2026.
 
-Expected action-preview endpoint:
+Action-preview endpoint:
 
 - `GET /health`
 - `GET /model-info`
@@ -10,6 +10,7 @@ Expected action-preview endpoint:
 - Port: `8016`
 - Mode: `shadow_only`
 - Mandatory response field: `execution_allowed: false`
+- Existing critic remains separate on port `8014` with `POST /critic`.
 
 Laptop request format uses SI units:
 
@@ -33,7 +34,17 @@ Laptop request format uses SI units:
 }
 ```
 
-The legacy example note says the policy may expect XYZ in `0.001 mm` and RPY in `0.001 degrees`. That is not yet verified against `get_action_prompt`, `format_state`, `results_format`, or the policy system prompt because the remote repository is unreachable. The client supports this conversion only under the explicit format name `legacy_xyz_0p001mm_rpy_0p001deg`.
+Discovered VLAC policy formatting:
+
+- Source: `/data/home/iliyas/ABot-Claw-piper/service_layer/VLAC/evo_vlac/examples/vla_example.py`
+- Policy object: `GAC_model(tag="Policy")`
+- Input images: one to three images.
+- Input state: seven values `[x, y, z, roll, pitch, yaw, gripper]`.
+- Example pre-format units: XYZ in `0.001 mm`, RPY in `0.001 degrees`; gripper convention remains unverified.
+- `GAC_model.format_state(..., gripper_format=False)` divides the first six values by `1000`, producing prompt state units in `mm` and `degrees`; it also divides the gripper value by `1000`.
+- Prompt action grammar: `{x: ...mm, y: ...mm, z: ...mm, roll: ... degrees, pitch: ... degrees, yaw: ... degrees, open: ...}`.
+- Action output is treated as a delta end-effector action from the VLAC/Songling convention. The frame is not verified for PiPER and remains `unknown`.
+- The testbed client sends SI units to 8016 and preserves the original SI values. The 8016 service performs the explicit SI-to-legacy conversion for the model prompt.
 
 Standard model-independent action:
 

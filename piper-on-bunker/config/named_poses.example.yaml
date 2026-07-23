@@ -1,0 +1,12 @@
+# Hardware joint values must be recorded on the real PiPER or validated against MoveIt.
+tabletop_home: null
+simulated_front_nav_view: null
+simulated_rear_nav_view: null
+scan_left: null
+scan_center: null
+scan_right: null
+inspect_workspace: null
+pre_contact: null
+retracted: null
+stowed: null
+safe_recovery: null

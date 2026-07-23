@@ -1,0 +1,6 @@
+physical_motion_default: false
+require_base_locked_for_manipulation: true
+require_named_pose_validation: true
+allow_raw_joint_arrays: false
+allow_shell_execution: false
+allow_ros_publish: false

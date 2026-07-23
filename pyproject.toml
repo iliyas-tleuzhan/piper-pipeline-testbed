@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "piper-pipeline-testbed"
+version = "0.1.0"
+description = "Offline-first PiPER-on-Bunker manipulation pipeline testbed"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["fastapi>=0.111", "pydantic>=2", "PyYAML>=6", "requests>=2", "uvicorn>=0.30"]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+piper-pipeline = "piper_on_bunker.cli:main"
+piper-agent-api = "piper_on_bunker.agent.api:main"
+
+[tool.setuptools]
+package-dir = {"" = "piper-on-bunker/src"}
+
+[tool.setuptools.packages.find]
+where = ["piper-on-bunker/src"]

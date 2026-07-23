@@ -1,0 +1,5 @@
+mode: mock
+physical_motion_enabled: false
+front_arm: NAVIGATION_VIEW
+rear_arm: STOWED
+base_motion: simulated_only

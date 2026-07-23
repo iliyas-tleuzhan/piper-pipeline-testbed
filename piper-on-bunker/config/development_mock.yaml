@@ -1,0 +1,18 @@
+mode: mock
+physical_motion_enabled: false
+arm_adapter: mock
+camera_adapter: mock
+base_adapter: mock
+action_server_url: http://localhost:8891
+named_poses:
+  tabletop_home: [0, 0, 0, 0, 0, 0]
+  simulated_front_nav_view: [0.0, 0.2, -0.3, 0.0, 1.0, 0.0]
+  simulated_rear_nav_view: [0.0, -0.2, -0.3, 0.0, 1.0, 0.0]
+  scan_left: [-0.2, 0.2, -0.3, 0.0, 1.0, 0.0]
+  scan_center: [0.0, 0.2, -0.3, 0.0, 1.0, 0.0]
+  scan_right: [0.2, 0.2, -0.3, 0.0, 1.0, 0.0]
+  inspect_workspace: [0.0, 0.1, -0.4, 0.0, 1.1, 0.0]
+  pre_contact: [0.0, 0.0, -0.5, 0.0, 1.2, 0.0]
+  retracted: [0.0, 0.2, -0.3, 0.0, 1.0, 0.0]
+  stowed: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  safe_recovery: [0.0, 0.15, -0.25, 0.0, 0.9, 0.0]

@@ -1,0 +1,7 @@
+mode: piper_laptop_hardware
+physical_motion_enabled: true
+arm_adapter: abotclaw_api
+camera_adapter: external_realsense
+base_adapter: mock
+action_server_url: http://localhost:8891
+named_poses: {}

@@ -1,0 +1,24 @@
+{
+  "named_poses": {
+    "tabletop_home": [0, 0, 0, 0, 0, 0],
+    "simulated_front_nav_view": [0, 0.2, -0.3, 0, 1, 0],
+    "inspect_workspace": [0, 0.1, -0.4, 0, 1.1, 0],
+    "retracted": [0, 0.2, -0.3, 0, 1, 0]
+  },
+  "observations": [
+    {
+      "camera_name": "ReplayCamera",
+      "frame_id": "table_camera_color_optical_frame",
+      "timestamp": "2026-07-23T00:00:00+00:00",
+      "metadata": {"synthetic": true}
+    }
+  ],
+  "targets": [
+    {
+      "label": "marked_button",
+      "confidence": 0.99,
+      "pixel": [320, 180],
+      "base_pose": {"x": 0.32, "y": 0.04, "z": 0.09, "qx": 0, "qy": 0, "qz": 0, "qw": 1, "frame_id": "base_link"}
+    }
+  ]
+}

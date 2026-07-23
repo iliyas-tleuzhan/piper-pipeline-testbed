@@ -1,0 +1,7 @@
+mode: replay
+physical_motion_enabled: false
+arm_adapter: replay
+camera_adapter: replay
+base_adapter: mock
+replay_fixture: piper-on-bunker/fixtures/mock/synthetic_button_fixture.json
+action_server_url: http://localhost:8891

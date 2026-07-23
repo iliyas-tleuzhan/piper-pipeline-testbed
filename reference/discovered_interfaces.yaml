@@ -1,0 +1,28 @@
+github_reference:
+  repository: iliyas-tleuzhan/ABot-Claw-piper
+  visibility_found: PUBLIC
+  default_branch: main
+  cloned_reference_path: C:/Users/user/.codex/reference/ABot-Claw-piper
+local_reference:
+  abot_claw_path: C:/Users/user/ABot-Claw
+implemented_current:
+  action_server: http://localhost:8891
+  action_server_marker: piper_language_action_server_v1
+  joint_state_topic: /joint_states_single
+  end_pose_topic: /end_pose
+  moveit_services:
+    - joint_moveit_ctrl_arm
+    - joint_moveit_ctrl_endpose
+    - joint_moveit_ctrl_gripper
+    - joint_moveit_ctrl_piper
+  camera_topics:
+    - /table_camera/color/image_raw
+    - /table_camera/aligned_depth_to_color/image_raw
+    - /table_camera/color/camera_info
+deprecated:
+  old_minimal_action_server: http://localhost:8890
+legacy:
+  full_agent_server: http://localhost:8888
+planned:
+  wrist_camera: future PiPER-on-Bunker camera adapter
+  bunker_base: interface only; no movement implemented

@@ -1,0 +1,4 @@
+enabled_by_default: false
+spatial_memory_url: http://master:8012
+yolo_url: http://master:8013/detect
+vlac_url: http://master:8014

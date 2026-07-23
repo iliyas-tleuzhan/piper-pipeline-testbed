@@ -1,0 +1,4 @@
+camera_name: table_camera
+color_topic: /table_camera/color/image_raw
+depth_topic: /table_camera/aligned_depth_to_color/image_raw
+camera_info_topic: /table_camera/color/camera_info

@@ -7,7 +7,9 @@ Current split:
 
 - Port 8014 remains the existing VLAC critic service.
 - Port 8016 is reserved for a separate VLAC action-preview service.
+- Port 8018 is reserved for a separate OpenVLA shadow service.
 - `piper-pipeline-testbed` only contains a shadow client and model-independent action schema.
 
 Zero-shot action correctness is not assumed. The action frame, units, parser grammar, and directional behavior must be verified before any execution design is considered.
 The current VLAC-2B results fail the left/right, up/down, forward/backward, open/close, and approach/press/retract behavioral checks, so zero-shot PiPER execution is rejected. The model remains available only for shadow research.
+OpenVLA is evaluated separately from VLAC. Even when its one-image, language-only, 7D action contract is schema-compatible for shadow inference, the BridgeData frame semantics still remain unverified for PiPER execution.

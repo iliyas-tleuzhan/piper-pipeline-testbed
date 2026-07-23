@@ -70,25 +70,29 @@ def test_missing_instruction_rejected():
 def test_parse_json_action_success():
     actions = parse_vlac_actions('{"dx_m": 0.01, "dy_m": -0.02, "dz_m": 0.0, "droll_rad": 0, "dpitch_rad": 0, "dyaw_rad": 0, "gripper": 1, "action_frame": "eef"}')
     assert len(actions) == 1
-    assert actions[0].translation_delta_m == [0.01, -0.02, 0.0]
-    assert actions[0].action_frame == "eef"
+    assert actions[0].raw_translation_m == [0.01, -0.02, 0.0]
+    assert actions[0].action_semantics == "unknown_songling_convention"
+    assert actions[0].model_confidence is None
     assert actions[0].execution_allowed is False
 
 
-def test_parse_numeric_action_medium_confidence():
+def test_parse_numeric_action_has_parser_reliability_only():
     action = parse_vlac_actions("action: [0.1, 0.2, 0.3, 0, 0, 0, -1]")[0]
-    assert action.confidence == "medium"
-    assert action.gripper_command == -1
+    assert action.parse_reliability == "assumed_numeric_layout"
+    assert action.model_confidence is None
+    assert action.gripper_command_raw == -1
 
 
-def test_parse_vlac_prompt_units_to_standard_si():
+def test_parse_vlac_prompt_units_to_neutral_si_fields():
     action = parse_vlac_actions(
         "{x: 0.1mm, y: 2.0mm, z: -3.0mm, roll: 1.0 degrees, pitch: -2.0 degrees, yaw: 3.0 degrees, open: 0.8}"
     )[0]
-    assert action.confidence == "high"
-    assert action.translation_delta_m == pytest.approx([0.0001, 0.002, -0.003])
-    assert action.rotation_delta_rad == pytest.approx([math.radians(1.0), math.radians(-2.0), math.radians(3.0)])
-    assert action.gripper_command == pytest.approx(0.8)
+    assert action.parse_reliability == "exact_grammar_match"
+    assert action.raw_translation_m == pytest.approx([0.0001, 0.002, -0.003])
+    assert action.raw_rotation_rad == pytest.approx([math.radians(1.0), math.radians(-2.0), math.radians(3.0)])
+    assert action.gripper_command_raw == pytest.approx(0.8)
+    assert action.action_semantics == "unknown_songling_convention"
+    assert action.model_confidence is None
     assert action.execution_allowed is False
 
 
@@ -100,7 +104,13 @@ def test_unknown_units_and_action_frame():
     with pytest.raises(ValueError):
         si_to_model_state(state(), "unknown")
     action = parse_vlac_actions('{"dx_m": 0.01, "action_frame": "tool_magic"}')[0]
-    assert action.action_frame == "unknown"
+    assert action.action_semantics == "unknown_songling_convention"
+
+
+def test_gripper_units_remain_unverified_in_request():
+    payload = build_action_preview_request(["data:image/png;base64," + PNG_1PX], "Move left", state(), state_format="legacy_xyz_0p001mm_rpy_0p001deg")
+    assert payload["input_state_model_units"][-1] == pytest.approx(0.004)
+    assert "unverified" in payload["input_state_model_units_note"].lower()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -133,6 +143,7 @@ def test_client_mandatory_execution_false_and_schema():
         result = VlacShadowPolicyClient(f"http://127.0.0.1:{server.server_port}", timeout_s=2).preview_action(payload)
         assert result["execution_allowed"] is False
         assert result["standard_actions"][0]["execution_allowed"] is False
+        assert result["standard_actions"][0]["model_confidence"] is None
     finally:
         server.shutdown()
 
@@ -142,12 +153,18 @@ def test_unavailable_service_returns_shadow_failure():
     result = VlacShadowPolicyClient("http://127.0.0.1:1", timeout_s=0.1).preview_action(payload)
     assert result["success"] is False
     assert result["execution_allowed"] is False
-    assert result["parse_confidence"] == "failed"
+    assert result["parse_reliability"] == "failed"
 
 
 def test_standard_action_serializes_execution_false():
     data = StandardAction([0, 0, 0], [0, 0, 0], None, "vlac-2b", "raw", execution_allowed=True).to_dict()
     assert data["execution_allowed"] is False
+    assert data["parse_reliability"] == "failed"
+
+
+def test_remote_image_urls_rejected_by_default():
+    with pytest.raises(ValueError):
+        validate_images(["https://example.com/test.jpg"])
 
 
 def test_shadow_module_does_not_import_motion_adapters():

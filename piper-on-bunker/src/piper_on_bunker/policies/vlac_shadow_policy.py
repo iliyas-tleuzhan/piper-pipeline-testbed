@@ -18,6 +18,9 @@ SHADOW_BANNER = "SHADOW MODE - NO ROBOT ACTION WILL BE EXECUTED"
 MODEL_NAME = "vlac-2b"
 REMOTE_MODEL_ID = "InternRobotics/VLAC"
 DEFAULT_ENDPOINT = "http://192.168.1.104:8016/action-preview"
+ACTION_SEMANTICS = "unknown_songling_convention"
+UNVERIFIED_ADAPTER_NOTE = "Raw VLAC action values are preserved without proving they are relative PiPER deltas."
+UNVERIFIED_GRIPPER_NOTE = "VLAC gripper input units are unverified. The client sends the live PiPER gripper state unchanged unless the remote service overrides it with a placeholder."
 
 
 @dataclass
@@ -136,6 +139,7 @@ def build_action_preview_request(
         "task_description": instruction,
         "end_effector_state": state_si.to_dict(),
         "input_state_model_units": model_units,
+        "input_state_model_units_note": UNVERIFIED_GRIPPER_NOTE,
         "state_format": state_format,
         "history": history or [],
         "execution_allowed": False,
@@ -172,13 +176,15 @@ def _parse_vlac_prompt_action(raw_text: str, raw_model_output: Any) -> Optional[
     if not all(math.isfinite(value) for value in values):
         raise ValueError("non-finite VLAC prompt action value")
     return StandardAction(
-        translation_delta_m=[values[0] / 1000.0, values[1] / 1000.0, values[2] / 1000.0],
-        rotation_delta_rad=[math.radians(values[3]), math.radians(values[4]), math.radians(values[5])],
-        gripper_command=values[6],
+        raw_translation_m=[values[0] / 1000.0, values[1] / 1000.0, values[2] / 1000.0],
+        raw_rotation_rad=[math.radians(values[3]), math.radians(values[4]), math.radians(values[5])],
+        gripper_command_raw=values[6],
         model_name=MODEL_NAME,
         raw_action=raw_model_output,
-        action_frame="unknown",
-        confidence="high",
+        action_semantics=ACTION_SEMANTICS,
+        parse_reliability="exact_grammar_match",
+        model_confidence=None,
+        unverified_adapter_assumption=UNVERIFIED_ADAPTER_NOTE,
         execution_allowed=False,
     )
 
@@ -202,33 +208,40 @@ def _extract_json(raw: Any) -> Optional[Any]:
 
 
 def _dict_to_action(item: Dict[str, Any], raw_model_output: Any) -> Optional[StandardAction]:
-    dx = _number(item, "dx_m", "dx", "delta_x", "x")
-    dy = _number(item, "dy_m", "dy", "delta_y", "y")
-    dz = _number(item, "dz_m", "dz", "delta_z", "z")
-    rr = _number(item, "droll_rad", "droll", "roll", "rx")
-    rp = _number(item, "dpitch_rad", "dpitch", "pitch", "ry")
-    ry = _number(item, "dyaw_rad", "dyaw", "yaw", "rz")
-    gripper = _number(item, "gripper", "gripper_command")
-    if all(value is None for value in (dx, dy, dz, rr, rp, ry, gripper)):
+    tx = _number(item, "raw_translation_m", "translation_delta_m", "dx_m", "dx", "delta_x", "x")
+    ty = _number(item, "raw_translation_m", "translation_delta_m", "dy_m", "dy", "delta_y", "y", index=1)
+    tz = _number(item, "raw_translation_m", "translation_delta_m", "dz_m", "dz", "delta_z", "z", index=2)
+    rr = _number(item, "raw_rotation_rad", "rotation_delta_rad", "droll_rad", "droll", "roll", "rx")
+    rp = _number(item, "raw_rotation_rad", "rotation_delta_rad", "dpitch_rad", "dpitch", "pitch", "ry", index=1)
+    ry = _number(item, "raw_rotation_rad", "rotation_delta_rad", "dyaw_rad", "dyaw", "yaw", "rz", index=2)
+    gripper = _number(item, "gripper_command_raw", "gripper", "gripper_command")
+    if all(value is None for value in (tx, ty, tz, rr, rp, ry, gripper)):
         return None
-    confidence = str(item.get("confidence") or item.get("parse_confidence") or "high")
-    frame = str(item.get("action_frame") or item.get("frame") or "unknown")
+    parse_reliability = str(item.get("parse_reliability") or item.get("parse_confidence") or "assumed_numeric_layout")
     return StandardAction(
-        translation_delta_m=[dx, dy, dz],
-        rotation_delta_rad=[rr, rp, ry],
-        gripper_command=gripper,
+        raw_translation_m=[tx, ty, tz],
+        raw_rotation_rad=[rr, rp, ry],
+        gripper_command_raw=gripper,
         model_name=MODEL_NAME,
         raw_action=raw_model_output,
-        action_frame=frame if frame in {"unknown", "camera", "eef", "base"} else "unknown",
-        confidence=confidence if confidence in {"high", "medium", "low", "failed"} else "low",
+        action_semantics=ACTION_SEMANTICS,
+        parse_reliability=parse_reliability if parse_reliability in {"exact_grammar_match", "assumed_numeric_layout", "failed"} else "assumed_numeric_layout",
+        model_confidence=None,
+        unverified_adapter_assumption=UNVERIFIED_ADAPTER_NOTE,
         execution_allowed=False,
     )
 
 
-def _number(item: Dict[str, Any], *names: str) -> Optional[float]:
+def _number(item: Dict[str, Any], *names: str, index: int = 0) -> Optional[float]:
     for name in names:
         if name in item and item[name] is not None:
-            value = float(item[name])
+            raw = item[name]
+            if isinstance(raw, list):
+                if len(raw) <= index or raw[index] is None:
+                    continue
+                value = float(raw[index])
+            else:
+                value = float(raw)
             if not math.isfinite(value):
                 raise ValueError(f"non-finite action field: {name}")
             return value
@@ -237,13 +250,15 @@ def _number(item: Dict[str, Any], *names: str) -> Optional[float]:
 
 def _numbers_to_action(numbers: List[float], raw_model_output: Any) -> StandardAction:
     return StandardAction(
-        translation_delta_m=[numbers[0], numbers[1], numbers[2]],
-        rotation_delta_rad=[numbers[3], numbers[4], numbers[5]],
-        gripper_command=numbers[6] if len(numbers) > 6 else None,
+        raw_translation_m=[numbers[0], numbers[1], numbers[2]],
+        raw_rotation_rad=[numbers[3], numbers[4], numbers[5]],
+        gripper_command_raw=numbers[6] if len(numbers) > 6 else None,
         model_name=MODEL_NAME,
         raw_action=raw_model_output,
-        action_frame="unknown",
-        confidence="medium",
+        action_semantics=ACTION_SEMANTICS,
+        parse_reliability="assumed_numeric_layout",
+        model_confidence=None,
+        unverified_adapter_assumption=UNVERIFIED_ADAPTER_NOTE,
         execution_allowed=False,
     )
 
@@ -272,12 +287,13 @@ class VlacShadowPolicyClient:
         payload.setdefault("mode", "shadow_only")
         payload.setdefault("model", REMOTE_MODEL_ID)
         payload.setdefault("latency_ms", latency_ms)
+        payload.setdefault("model_confidence", None)
         raw = payload.get("raw_model_output", payload.get("raw_output", payload))
         parsed = parse_vlac_actions(raw)
         if "parsed_actions" not in payload or not payload["parsed_actions"]:
             payload["parsed_actions"] = [action.to_dict() for action in parsed]
         payload["standard_actions"] = [action.to_dict() for action in parsed] if parsed else [empty_standard_action(MODEL_NAME, raw).to_dict()]
-        payload["parse_confidence"] = payload.get("parse_confidence") or (parsed[0].confidence if parsed else "failed")
+        payload["parse_reliability"] = payload.get("parse_reliability") or (parsed[0].parse_reliability if parsed else "failed")
         payload.setdefault("warnings", [])
         return payload
 
@@ -291,7 +307,8 @@ class VlacShadowPolicyClient:
             "detail": detail,
             "parsed_actions": [],
             "standard_actions": [empty_standard_action(MODEL_NAME, detail).to_dict()],
-            "parse_confidence": "failed",
+            "parse_reliability": "failed",
+            "model_confidence": None,
             "warnings": [message],
             "latency_ms": (time.monotonic() - started) * 1000.0,
         }

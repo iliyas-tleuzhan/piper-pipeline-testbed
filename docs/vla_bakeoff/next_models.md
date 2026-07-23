@@ -11,9 +11,10 @@ The standard shadow action schema is intentionally model-independent so later ca
 Each model must first run in shadow mode with:
 
 - raw output preservation
-- parser confidence
+- parser reliability
 - explicit action-frame reporting
 - explicit unit reporting
 - `execution_allowed: false`
 
 No candidate should be connected to PiPER movement until units, frame, and safety behavior are independently verified.
+VLAC-2B currently fails those checks and remains shadow-only research output, not an execution policy.

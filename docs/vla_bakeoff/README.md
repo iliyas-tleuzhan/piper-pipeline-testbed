@@ -1,6 +1,7 @@
 # VLA Bakeoff
 
 VLAC is being tested only in shadow mode. The model may propose text or delta actions, but no output is connected to MoveIt, ABot-Claw movement endpoints, ROS publishers, or PiPER command topics.
+The parser may recognize the expected VLAC text grammar, but that is not a calibrated model confidence score and not evidence that the action is correct.
 
 Current split:
 
@@ -9,3 +10,4 @@ Current split:
 - `piper-pipeline-testbed` only contains a shadow client and model-independent action schema.
 
 Zero-shot action correctness is not assumed. The action frame, units, parser grammar, and directional behavior must be verified before any execution design is considered.
+The current VLAC-2B results fail the left/right, up/down, forward/backward, open/close, and approach/press/retract behavioral checks, so zero-shot PiPER execution is rejected. The model remains available only for shadow research.

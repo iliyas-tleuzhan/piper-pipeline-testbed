@@ -1,20 +1,10 @@
-# Next VLA Models
+# Next Models
 
-The standard shadow action schema is intentionally model-independent so later candidates can be compared without wiring any model to robot execution:
+SmolVLA is being audited as a separate shadow-only path from VLAC.
 
-- SmolVLA
-- X-VLA
-- GR00T
-- OpenVLA
-- pi0.5
+Current ordering:
 
-Each model must first run in shadow mode with:
-
-- raw output preservation
-- parser reliability
-- explicit action-frame reporting
-- explicit unit reporting
-- `execution_allowed: false`
-
-No candidate should be connected to PiPER movement until units, frame, and safety behavior are independently verified.
-VLAC-2B currently fails those checks and remains shadow-only research output, not an execution policy.
+1. Preserve VLAC as rejected-for-execution shadow research.
+2. Audit official SmolVLA against PiPER's real observation/action schema.
+3. If SmolVLA is incompatible, collect a PiPER LeRobot dataset and fine-tune before any execution discussion.
+4. Keep future models behind the same shadow-only boundary until embodiment, units, and action semantics are proven.

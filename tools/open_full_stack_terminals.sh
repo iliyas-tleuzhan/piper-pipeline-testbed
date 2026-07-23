@@ -205,7 +205,7 @@ if [ "$USE_TMUX" = "1" ] && tmux has-session -t "$SESSION" 2>/dev/null; then
 fi
 
 add_local() {
-  launch_terminal "01 - PiPER CAN Monitor" "$PIPELINE_DIR" "ip -details -statistics link show can0 || { echo 'can0 is missing'; exit 1; }; if command -v candump >/dev/null 2>&1; then echo 'Passive CAN monitor only: candump can0'; candump can0; else echo 'candump is not installed'; fi"
+  launch_terminal "01 - PiPER CAN Monitor" "$PIPELINE_DIR" "if ip -details -statistics link show can0 >/dev/null 2>&1; then ip -details -statistics link show can0; echo; echo 'Passive host candump only:'; candump can0; elif docker ps --format '{{.Names}}' | grep -qx '$ROS_CONTAINER'; then echo 'Host can0 not found; observing can0 inside $ROS_CONTAINER:'; docker exec -it $ROS_CONTAINER bash -lc 'ip -details -statistics link show can0; echo; echo Passive container candump only:; candump can0'; else echo 'can0 is missing and $ROS_CONTAINER is not running'; exit 1; fi"
 
   launch_terminal "02 - ROS Noetic / PiPER Driver" "$ABOT_DIR" "if tmux has-session -t abotclaw 2>/dev/null; then tmux capture-pane -f -t abotclaw:piper_driver -S -200; echo; echo 'Existing driver tmux session: tmux attach -t abotclaw'; else echo 'PiPER driver is not observed in tmux.'; if [ '$OBSERVE_ONLY' -eq 1 ]; then echo 'Observe-only mode: not starting driver. Startup scripts inspected in $ABOT_DIR.'; else echo 'Start command must be chosen from inspected ABot-Claw scripts; no automatic driver start here.'; fi; fi"
 

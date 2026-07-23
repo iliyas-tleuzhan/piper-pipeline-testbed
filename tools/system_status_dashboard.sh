@@ -5,6 +5,8 @@ ROS_CONTAINER="${ROS_CONTAINER:-abot-piper-noetic}"
 REMOTE_HOST="${REMOTE_HOST:-iliyas@master}"
 REMOTE_FALLBACK_HOST="${REMOTE_FALLBACK_HOST:-iliyas@192.168.1.104}"
 REFRESH_S="${REFRESH_S:-5}"
+CHECK_REMOTE="${CHECK_REMOTE:-1}"
+CHECK_PIPELINE_API="${CHECK_PIPELINE_API:-1}"
 
 ok() { printf "%-18s OK\n" "$1"; }
 down() { printf "%-18s DOWN%s\n" "$1" "${2:+ - $2}"; }
@@ -26,13 +28,25 @@ remote_cmd() {
     ssh -o BatchMode=yes -o ConnectTimeout=2 "$REMOTE_FALLBACK_HOST" "$1" >/dev/null 2>&1
 }
 
+check_can() {
+  if ip link show can0 >/dev/null 2>&1; then
+    ip link show can0 | grep -q "state UP"
+    return
+  fi
+  if have_docker; then
+    docker exec "$ROS_CONTAINER" bash -lc 'ip link show can0 2>/dev/null | grep -q "state UP"' >/dev/null 2>&1
+    return
+  fi
+  return 1
+}
+
 while true; do
   clear
   printf "ABot-Claw + PiPER read-only status dashboard\n"
   date
   printf "\n"
 
-  ip link show can0 >/dev/null 2>&1 && ip link show can0 | grep -q "state UP" && ok "CAN" || down "CAN" "can0 missing or down"
+  check_can && ok "CAN" || down "CAN" "can0 missing or down"
 
   if have_docker; then
     ros_exec "rostopic list" && ok "ROS master" || down "ROS master"
@@ -50,10 +64,14 @@ while true; do
   fi
 
   check_http "http://127.0.0.1:8891/health" && ok "8891" || down "8891"
-  check_http "http://127.0.0.1:8892/health" && ok "8892" || down "8892"
-  remote_cmd "curl -fsS --max-time 1 http://127.0.0.1:8012/health" && ok "Spatial Memory" || down "Spatial Memory"
-  remote_cmd "curl -fsS --max-time 1 http://127.0.0.1:8013/health" && ok "YOLO" || down "YOLO"
-  remote_cmd "curl -fsS --max-time 1 http://127.0.0.1:8014/health" && ok "VLAC" || down "VLAC"
+  if [ "$CHECK_PIPELINE_API" = "1" ]; then
+    check_http "http://127.0.0.1:8892/health" && ok "8892" || down "8892"
+  fi
+  if [ "$CHECK_REMOTE" = "1" ]; then
+    remote_cmd "curl -fsS --max-time 1 http://127.0.0.1:8012/health" && ok "Spatial Memory" || down "Spatial Memory"
+    remote_cmd "curl -fsS --max-time 1 http://127.0.0.1:8013/health" && ok "YOLO" || down "YOLO"
+    remote_cmd "curl -fsS --max-time 1 http://127.0.0.1:8014/health" && ok "VLAC" || down "VLAC"
+  fi
 
   printf "\nRead-only checks only. Refresh: %ss\n" "$REFRESH_S"
   sleep "$REFRESH_S"

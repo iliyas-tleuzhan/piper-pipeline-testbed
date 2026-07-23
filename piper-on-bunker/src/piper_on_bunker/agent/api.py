@@ -26,7 +26,7 @@ def create_app(config_path: str = "piper-on-bunker/config/development_mock.yaml"
 
     @app.post("/command")
     def command(req: AgentCommand) -> dict:
-        return mapper.map_command(req.command)().__dict__
+        return mapper.map_command(req.command, req.target)().__dict__
 
     return app
 

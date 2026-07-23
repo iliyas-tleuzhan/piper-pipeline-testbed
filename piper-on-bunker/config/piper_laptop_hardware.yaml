@@ -1,7 +1,17 @@
 mode: piper_laptop_hardware
-physical_motion_enabled: true
+physical_motion_enabled: false
 arm_adapter: abotclaw_api
 camera_adapter: external_realsense
 base_adapter: mock
 action_server_url: http://localhost:8891
 named_poses: {}
+safety:
+  require_local_activation: true
+  require_calibrated_named_poses: true
+  require_base_locked_for_manipulation: true
+  require_live_robot_state: true
+  require_non_estop: true
+  max_state_age_s: 1.0
+  max_camera_age_s: 1.0
+  max_transform_age_s: 5.0
+  command_timeout_s: 20.0

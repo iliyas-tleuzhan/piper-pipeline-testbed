@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from time import monotonic
-from typing import Any
+from typing import Any, Optional, Tuple
 
 
 class ArmMode(str, Enum):
@@ -36,6 +36,14 @@ class StatusCode(str, Enum):
     ESTOP = "ESTOP"
     HARDWARE_DISABLED = "HARDWARE_DISABLED"
     INVALID_COMMAND = "INVALID_COMMAND"
+    NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
+    API_CONTRACT_ERROR = "API_CONTRACT_ERROR"
+    STALE_STATE = "STALE_STATE"
+    STALE_IMAGE = "STALE_IMAGE"
+    SAFETY_VIOLATION = "SAFETY_VIOLATION"
+    VISUAL_SERVO_DISABLED_OPEN_LOOP = "VISUAL_SERVO_DISABLED_OPEN_LOOP"
+    BASE_NOT_LOCKED = "BASE_NOT_LOCKED"
+    INVALID_DEPTH = "INVALID_DEPTH"
     ERROR = "ERROR"
 
 
@@ -56,18 +64,18 @@ class Observation:
     camera_name: str
     frame_id: str
     timestamp: str
-    rgb_path: str | None = None
-    depth_path: str | None = None
-    metadata: dict[str, Any] = field(default_factory=dict)
+    rgb_path: Optional[str] = None
+    depth_path: Optional[str] = None
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
 class Target:
     label: str
     confidence: float
-    pixel: tuple[int, int] | None = None
-    camera_pose: Pose | None = None
-    base_pose: Pose | None = None
+    pixel: Optional[Tuple[int, int]] = None
+    camera_pose: Optional[Pose] = None
+    base_pose: Optional[Pose] = None
 
 
 @dataclass
@@ -80,8 +88,8 @@ class FailureDetails:
 @dataclass
 class RecoveryInfo:
     attempted: bool = False
-    action: str | None = None
-    success: bool | None = None
+    action: Optional[str] = None
+    success: Optional[bool] = None
 
 
 @dataclass
@@ -92,8 +100,8 @@ class SkillResult:
     started_at: str
     ended_at: str
     duration_s: float
-    outputs: dict[str, Any] = field(default_factory=dict)
-    failure: FailureDetails | None = None
+    outputs: dict = field(default_factory=dict)
+    failure: Optional[FailureDetails] = None
     recovery: RecoveryInfo = field(default_factory=RecoveryInfo)
 
     @classmethod
@@ -103,8 +111,8 @@ class SkillResult:
         code: StatusCode,
         message: str,
         start_monotonic: float,
-        outputs: dict[str, Any] | None = None,
-        failure_detail: str | None = None,
+        outputs: Optional[dict] = None,
+        failure_detail: Optional[str] = None,
     ) -> "SkillResult":
         now = datetime.now(timezone.utc).isoformat()
         failure = None if success else FailureDetails(code, failure_detail or message)

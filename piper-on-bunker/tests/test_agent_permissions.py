@@ -7,7 +7,9 @@ from piper_on_bunker.perception.mock_camera import MockCamera
 
 def test_agent_allows_high_level_mission():
     mapper = CommandMapper(MissionSupervisor(MockArm(), MockCamera()))
-    assert mapper.map_command("run_button_mission")().success
+    result = mapper.map_command("run_button_mission")()
+    assert not result.success
+    assert result.status_code == StatusCode.VERIFICATION_FAILURE
 
 
 def test_agent_denies_raw_commands():

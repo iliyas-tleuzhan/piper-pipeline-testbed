@@ -18,7 +18,6 @@ def test_camera_unavailable_failure():
 
 def test_verification_failure():
     supervisor = MissionSupervisor(MockArm(), MockCamera())
-    supervisor.verification_should_pass = False
     result = supervisor.run_button_mission()
     assert not result.success
     assert result.status_code == StatusCode.VERIFICATION_FAILURE

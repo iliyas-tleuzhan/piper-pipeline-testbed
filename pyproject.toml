@@ -7,11 +7,17 @@ name = "piper-pipeline-testbed"
 version = "0.1.0"
 description = "Offline-first PiPER-on-Bunker manipulation pipeline testbed"
 readme = "README.md"
-requires-python = ">=3.10"
-dependencies = ["fastapi>=0.111", "pydantic>=2", "PyYAML>=6", "requests>=2", "uvicorn>=0.30"]
+requires-python = ">=3.8"
+dependencies = [
+    "fastapi>=0.103,<0.125",
+    "pydantic>=2,<3",
+    "PyYAML>=5.3,<7",
+    "requests>=2.31,<3",
+    "uvicorn>=0.23,<0.31",
+]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "httpx>=0.27"]
+test = ["pytest>=7.4,<9", "httpx>=0.24,<0.29"]
 
 [project.scripts]
 piper-pipeline = "piper_on_bunker.cli:main"

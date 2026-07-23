@@ -1,0 +1,32 @@
+# Copy to piper_laptop_hardware.local.yaml on the PiPER laptop only.
+# The .local.yaml file is ignored by git and is the single physical activation checkpoint.
+local_activation:
+  physical_motion_enabled: false
+  operator: ""
+  calibrated_on: ""
+  acknowledgement: "I understand this can move the physical PiPER arm."
+named_poses:
+  tabletop_home: null
+  simulated_front_nav_view: null
+  inspect_workspace: null
+  scan_left: null
+  scan_center: null
+  scan_right: null
+  pre_contact: null
+  retracted: null
+  stowed: null
+  safe_recovery: null
+transforms:
+  table_camera_color_optical_frame_to_piper_base:
+    translation_m: null
+    quaternion_xyzw: null
+safety:
+  workspace_bounds_m:
+    x: [0.15, 0.55]
+    y: [-0.30, 0.30]
+    z: [0.02, 0.35]
+  max_pre_contact_distance_m: 0.10
+  max_approach_distance_m: 0.04
+  max_press_distance_m: 0.015
+  max_retract_distance_m: 0.08
+  max_speed_scaling: 0.10

@@ -1,8 +1,16 @@
 # PiPER Pipeline Testbed
 
-This repository is an offline-first testbed for a restricted PiPER-on-Bunker manipulation pipeline.
+This repository is an offline-first testbed for a restricted tabletop PiPER manipulation pipeline.
 
-The first supported mission is tabletop-only: find a marked button, inspect it, press/touch it, verify the result, and return to a forward navigation-view pose. This laptop does not have PiPER, CAN, ROS, RealSense, Jetson, Bunker, or ABot-Claw hardware access, so all local tests use mock or replay adapters.
+The first supported mission is tabletop-only: find a marked button, inspect it, press/touch it, verify the result, and return to a forward navigation-view pose.
+
+Current implementation levels:
+
+- Implemented and unit-tested: mock/dry-run mission flow, strict 8891 client, gated ROS MoveIt adapter, RealSense ROS camera adapter, ArUco detection, static transforms, local named-pose calibration, JSONL logging, safety checks, restricted agent API, and dual-arm mock.
+- Verified read-only on the hardware laptop: ABot-Claw source contracts, `abot-piper-noetic` Python/ROS versions, container mount, and current absence of `can0`, running `8891`, and enumerated RealSense.
+- Physically executed successfully: none.
+
+Committed hardware configuration disables physical motion. Motion requires an ignored local activation file, calibrated named poses, safety bounds, live state, and operator approval.
 
 ## Quick Start
 

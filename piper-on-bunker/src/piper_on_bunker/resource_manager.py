@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -11,7 +12,7 @@ class Lease:
 
 class ResourceManager:
     def __init__(self) -> None:
-        self._leases: dict[str, Lease] = {}
+        self._leases = {}
 
     def acquire(self, resource: str, owner: str) -> bool:
         existing = self._leases.get(resource)
@@ -29,6 +30,6 @@ class ResourceManager:
         del self._leases[resource]
         return True
 
-    def owner(self, resource: str) -> str | None:
+    def owner(self, resource: str) -> Optional[str]:
         lease = self._leases.get(resource)
         return lease.owner if lease else None

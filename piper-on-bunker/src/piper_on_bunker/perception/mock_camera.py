@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from piper_on_bunker.models import Observation, Pose, Target, utc_now
 
 
@@ -19,7 +21,7 @@ class MockCamera:
             metadata={"synthetic": True},
         )
 
-    def detect_target(self, observation: Observation, label: str) -> Target | None:
+    def detect_target(self, observation: Observation, label: str) -> Optional[Target]:
         if not self.target_found:
             return None
         camera_pose = Pose(x=0.02, y=0.01, z=0.45, frame_id=observation.frame_id)

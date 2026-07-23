@@ -12,5 +12,9 @@ def test_development_config_loads():
 
 
 def test_hardware_disabled_by_default():
+    PipelineConfig(mode="piper_laptop_hardware", physical_motion_enabled=False).validate()
+
+
+def test_hardware_motion_requires_local_activation():
     with pytest.raises(ValueError):
-        PipelineConfig(mode="piper_laptop_hardware", physical_motion_enabled=False).validate()
+        PipelineConfig(mode="piper_laptop_hardware", physical_motion_enabled=True).validate()

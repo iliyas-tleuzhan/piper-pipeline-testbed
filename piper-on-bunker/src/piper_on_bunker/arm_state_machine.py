@@ -3,7 +3,7 @@ from __future__ import annotations
 from piper_on_bunker.models import ArmMode
 
 
-ALLOWED_TRANSITIONS: dict[ArmMode, set[ArmMode]] = {
+ALLOWED_TRANSITIONS = {
     ArmMode.IDLE: {ArmMode.STOWED, ArmMode.NAVIGATION_VIEW, ArmMode.FAULT, ArmMode.ESTOP},
     ArmMode.STOWED: {ArmMode.IDLE, ArmMode.NAVIGATION_VIEW, ArmMode.TASK_INSPECTION, ArmMode.FAULT, ArmMode.ESTOP},
     ArmMode.NAVIGATION_VIEW: {ArmMode.ACTIVE_SCAN, ArmMode.TASK_INSPECTION, ArmMode.STOWED, ArmMode.FAULT, ArmMode.ESTOP},

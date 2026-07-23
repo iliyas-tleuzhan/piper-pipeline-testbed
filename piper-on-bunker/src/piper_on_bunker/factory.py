@@ -21,7 +21,7 @@ def build_supervisor(config: PipelineConfig) -> MissionSupervisor:
     elif config.arm_adapter == "abotclaw_api":
         arm = ABotClawApiArm(config.action_server_url, dry_run=not config.physical_motion_enabled)
     elif config.arm_adapter == "piper_ros":
-        arm = PiperRosArm(config.physical_motion_enabled)
+        arm = PiperRosArm(config.physical_motion_enabled, named_poses=config.named_poses, safety=config.safety)
     else:
         raise ValueError(f"unknown arm adapter: {config.arm_adapter}")
 
@@ -35,7 +35,7 @@ def build_supervisor(config: PipelineConfig) -> MissionSupervisor:
         camera = ExternalFixedCamera()
     else:
         raise ValueError(f"unknown camera adapter: {config.camera_adapter}")
-    return MissionSupervisor(arm=arm, camera=camera, base=MockBase())
+    return MissionSupervisor(arm=arm, camera=camera, base=MockBase(), safety=config.safety)
 
 
 def build_supervisor_from_path(path: str | Path) -> MissionSupervisor:

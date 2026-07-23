@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from time import monotonic
+from typing import Optional, Set
 
 from piper_on_bunker.models import Pose, SkillResult, StatusCode
 
 
 class MockArm:
-    def __init__(self, named_poses: dict | None = None, failures: set[str] | None = None) -> None:
+    def __init__(self, named_poses: Optional[dict] = None, failures: Optional[Set[str]] = None) -> None:
         self.named_poses = named_poses or {}
         self.failures = failures or set()
         self.current_pose_name = "tabletop_home"
         self.stopped = False
         self.press_count = 0
 
-    def _result(self, action: str, ok_code: StatusCode = StatusCode.OK, outputs: dict | None = None) -> SkillResult:
+    def _result(self, action: str, ok_code: StatusCode = StatusCode.OK, outputs: Optional[dict] = None) -> SkillResult:
         start = monotonic()
         mapped_failures = {
             "move_to_pose": {"ik_failure", "planning_failure"},

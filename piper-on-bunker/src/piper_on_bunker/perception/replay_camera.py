@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from piper_on_bunker.models import Observation, Pose, Target, utc_now
 
@@ -21,7 +22,7 @@ class ReplayCamera:
             metadata=obs.get("metadata", {}),
         )
 
-    def detect_target(self, observation: Observation, label: str) -> Target | None:
+    def detect_target(self, observation: Observation, label: str) -> Optional[Target]:
         for raw in self.fixture.get("targets", []):
             if raw.get("label") == label:
                 p = raw["base_pose"]

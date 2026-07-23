@@ -1,6 +1,23 @@
 physical_motion_default: false
+require_local_activation: true
 require_base_locked_for_manipulation: true
+require_live_robot_state: true
+require_non_estop: true
 require_named_pose_validation: true
+require_calibrated_named_poses: true
 allow_raw_joint_arrays: false
 allow_shell_execution: false
 allow_ros_publish: false
+max_state_age_s: 1.0
+max_camera_age_s: 1.0
+max_transform_age_s: 5.0
+command_timeout_s: 20.0
+workspace_bounds_m:
+  x: [0.15, 0.55]
+  y: [-0.30, 0.30]
+  z: [0.02, 0.35]
+max_pre_contact_distance_m: 0.10
+max_approach_distance_m: 0.04
+max_press_distance_m: 0.015
+max_retract_distance_m: 0.08
+max_speed_scaling: 0.10

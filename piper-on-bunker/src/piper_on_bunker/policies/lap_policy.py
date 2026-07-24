@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import time
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -581,6 +582,40 @@ def _empty_trajectory_metrics() -> dict:
     }
 
 
+def _evaluate_candidate(
+    *,
+    name: str,
+    prefix_length: int,
+    trajectory,
+    success: bool,
+    planning_time_s,
+    moveit_error_code: int,
+    cartesian_path_fraction: float,
+    config: LapRuntimeConfig,
+):
+    metrics = _trajectory_joint_metrics(trajectory) if success else _empty_trajectory_metrics()
+    safe = bool(success)
+    rejection_reason = None
+    if safe:
+        try:
+            _verify_trajectory_metrics(metrics, config)
+        except ValueError as exc:
+            safe = False
+            rejection_reason = str(exc)
+    return {
+        "name": name,
+        "prefix_length": int(prefix_length),
+        "trajectory": trajectory,
+        "success": bool(success),
+        "planning_time_s": planning_time_s,
+        "moveit_error_code": int(moveit_error_code),
+        "metrics": metrics,
+        "safe": bool(safe),
+        "rejection_reason": rejection_reason,
+        "cartesian_path_fraction": float(cartesian_path_fraction),
+    }
+
+
 def _make_geometry_pose(target: Pose):
     from geometry_msgs.msg import Pose as GeometryPose
 
@@ -593,6 +628,106 @@ def _make_geometry_pose(target: Pose):
     pose_msg.orientation.z = float(target.qz)
     pose_msg.orientation.w = float(target.qw)
     return pose_msg
+
+
+def _set_local_joint_branch_constraint(group, tolerance_rad: float) -> Optional[dict]:
+    if not hasattr(group, "get_active_joints") or not hasattr(group, "get_current_joint_values") or not hasattr(group, "set_path_constraints"):
+        return None
+    try:
+        from moveit_msgs.msg import Constraints, JointConstraint
+    except Exception:
+        return None
+
+    joint_names = list(group.get_active_joints())
+    current_values = [float(value) for value in group.get_current_joint_values()]
+    constraints = Constraints()
+    constraints.name = "lap_local_joint_branch"
+    for joint_name, joint_value in zip(joint_names, current_values):
+        constraint = JointConstraint()
+        constraint.joint_name = str(joint_name)
+        constraint.position = float(joint_value)
+        constraint.tolerance_above = float(tolerance_rad)
+        constraint.tolerance_below = float(tolerance_rad)
+        constraint.weight = 1.0
+        constraints.joint_constraints.append(constraint)
+    group.set_path_constraints(constraints)
+    return {
+        "name": constraints.name,
+        "joint_names": joint_names,
+        "current_joint_values": current_values,
+        "tolerance_rad": float(tolerance_rad),
+    }
+
+
+def _compute_seeded_ik_joint_target(group, target_pose, end_effector_link: str, timeout_s: float) -> Optional[dict]:
+    if not hasattr(group, "get_current_state") or not hasattr(group, "get_active_joints") or not hasattr(group, "get_current_joint_values"):
+        return None
+    try:
+        import rospy
+        from geometry_msgs.msg import PoseStamped
+        from moveit_msgs.srv import GetPositionIK, GetPositionIKRequest
+    except Exception:
+        return None
+
+    try:
+        rospy.wait_for_service("/compute_ik", timeout=2.0)
+        service = rospy.ServiceProxy("/compute_ik", GetPositionIK)
+    except Exception:
+        return None
+
+    joint_names = list(group.get_active_joints())
+    current_values = [float(value) for value in group.get_current_joint_values()]
+    base_state = group.get_current_state()
+    offsets = [
+        [0.0] * len(joint_names),
+        [0.20, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [-0.20, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.10, -0.10, 0.0, 0.0, 0.0],
+        [0.0, -0.10, 0.10, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.35],
+        [0.0, 0.0, 0.0, 0.0, 0.0, -0.35],
+    ]
+    best = None
+    for index, offset in enumerate(offsets):
+        seed_state = copy.deepcopy(base_state)
+        positions = []
+        for joint_index, current_value in enumerate(current_values):
+            delta = offset[joint_index] if joint_index < len(offset) else 0.0
+            positions.append(float(current_value + delta))
+        seed_state.is_diff = True
+        seed_state.joint_state.name = list(joint_names)
+        seed_state.joint_state.position = list(positions)
+        request = GetPositionIKRequest()
+        request.ik_request.group_name = "arm"
+        request.ik_request.ik_link_name = end_effector_link
+        request.ik_request.robot_state = seed_state
+        request.ik_request.avoid_collisions = True
+        request.ik_request.timeout = rospy.Duration(float(min(timeout_s, 1.0)))
+        stamped = PoseStamped()
+        stamped.header.frame_id = str(group.get_planning_frame())
+        stamped.header.stamp = rospy.Time.now()
+        stamped.pose = target_pose
+        request.ik_request.pose_stamped = stamped
+        try:
+            response = service(request)
+        except Exception:
+            continue
+        if int(getattr(response.error_code, "val", response.error_code)) != 1:
+            continue
+        solution_map = dict(zip(response.solution.joint_state.name, response.solution.joint_state.position))
+        solution = [float(solution_map[name]) for name in joint_names if name in solution_map]
+        if len(solution) != len(joint_names):
+            continue
+        max_delta = float(max(abs(a - b) for a, b in zip(solution, current_values)))
+        candidate = {
+            "joint_names": joint_names,
+            "joint_positions": solution,
+            "seed_index": index,
+            "max_delta_from_current_rad": max_delta,
+        }
+        if best is None or candidate["max_delta_from_current_rad"] < best["max_delta_from_current_rad"]:
+            best = candidate
+    return best
 
 
 def _verify_current_tcp_pose(group, target: Pose, tolerance_m: float) -> dict:
@@ -640,93 +775,133 @@ def preview_or_execute(
     group.set_max_acceleration_scaling_factor(float(motion_profile.acceleration_scaling))
 
     waypoint_msgs = [_make_geometry_pose(target) for target in trajectory_plan.absolute_tcp_targets]
-    cartesian_trajectory = None
-    cartesian_fraction = 0.0
     candidates = []
+    selected_prefix_length = int(trajectory_plan.selected_horizon_length)
 
-    if waypoint_msgs:
-        cartesian_trajectory, cartesian_fraction = group.compute_cartesian_path(
-            waypoint_msgs,
-            float(config.cartesian_eef_step_m),
-            float(config.cartesian_jump_threshold),
+    for prefix_length in range(len(waypoint_msgs), 0, -1):
+        cartesian_trajectory = None
+        cartesian_fraction = 0.0
+        if waypoint_msgs[:prefix_length]:
+            cartesian_trajectory, cartesian_fraction = group.compute_cartesian_path(
+                waypoint_msgs[:prefix_length],
+                float(config.cartesian_eef_step_m),
+                float(config.cartesian_jump_threshold),
+            )
+        candidate = _evaluate_candidate(
+            name="cartesian_path",
+            prefix_length=prefix_length,
+            trajectory=cartesian_trajectory,
+            success=bool(cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", [])),
+            planning_time_s=None,
+            moveit_error_code=1 if cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", []) else -1,
+            cartesian_path_fraction=float(cartesian_fraction),
+            config=config,
         )
-    if cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", []):
-        cartesian_trajectory = group.retime_trajectory(
-            group.get_current_state(),
-            cartesian_trajectory,
-            velocity_scaling_factor=float(motion_profile.velocity_scaling),
-            acceleration_scaling_factor=float(motion_profile.acceleration_scaling),
-        )
-        cartesian_metrics = _trajectory_joint_metrics(cartesian_trajectory)
-        cartesian_reason = None
-        cartesian_safe = True
-        try:
-            _verify_trajectory_metrics(cartesian_metrics, config)
-        except ValueError as exc:
-            cartesian_safe = False
-            cartesian_reason = str(exc)
+        if candidate["success"]:
+            candidate["trajectory"] = group.retime_trajectory(
+                group.get_current_state(),
+                candidate["trajectory"],
+                velocity_scaling_factor=float(motion_profile.velocity_scaling),
+                acceleration_scaling_factor=float(motion_profile.acceleration_scaling),
+            )
+            candidate["metrics"] = _trajectory_joint_metrics(candidate["trajectory"])
+            candidate["safe"] = True
+            candidate["rejection_reason"] = None
+            try:
+                _verify_trajectory_metrics(candidate["metrics"], config)
+            except ValueError as exc:
+                candidate["safe"] = False
+                candidate["rejection_reason"] = str(exc)
+        else:
+            candidate["rejection_reason"] = "cartesian path returned no trajectory"
         if float(cartesian_fraction) < float(config.min_cartesian_path_fraction):
-            cartesian_safe = False
-            cartesian_reason = (
+            candidate["safe"] = False
+            candidate["rejection_reason"] = (
                 f"cartesian path fraction {float(cartesian_fraction):.6f} below "
                 f"min_cartesian_path_fraction={float(config.min_cartesian_path_fraction):.6f}"
             )
-        candidates.append(
-            {
-                "name": "cartesian_path",
-                "trajectory": cartesian_trajectory,
-                "success": True,
-                "planning_time_s": None,
-                "moveit_error_code": 1,
-                "metrics": cartesian_metrics,
-                "safe": cartesian_safe,
-                "rejection_reason": cartesian_reason,
-                "cartesian_path_fraction": float(cartesian_fraction),
-            }
-        )
-    else:
-        candidates.append(
-            {
-                "name": "cartesian_path",
-                "trajectory": None,
-                "success": False,
-                "planning_time_s": None,
-                "moveit_error_code": -1,
-                "metrics": _empty_trajectory_metrics(),
-                "safe": False,
-                "rejection_reason": "cartesian path returned no trajectory",
-                "cartesian_path_fraction": float(cartesian_fraction),
-            }
-        )
+        candidates.append(candidate)
+        if candidate["safe"]:
+            break
 
-    final_target = trajectory_plan.absolute_tcp_targets[-1]
-    group.set_pose_target(_make_geometry_pose(final_target), trajectory_plan.moveit_end_effector_link)
-    normalized = _normalize_plan_result(group.plan())
-    fallback_trajectory = normalized["trajectory"]
-    fallback_metrics = _trajectory_joint_metrics(fallback_trajectory) if normalized["success"] else _empty_trajectory_metrics()
-    fallback_reason = None
-    fallback_safe = bool(normalized["success"])
-    if fallback_safe:
-        try:
-            _verify_trajectory_metrics(fallback_metrics, config)
-        except ValueError as exc:
-            fallback_safe = False
-            fallback_reason = str(exc)
-    else:
-        fallback_reason = "final pose fallback returned no safe plan"
-    candidates.append(
-        {
-            "name": "final_pose_fallback",
-            "trajectory": fallback_trajectory,
-            "success": bool(normalized["success"]),
-            "planning_time_s": normalized["planning_time_s"],
-            "moveit_error_code": normalized["moveit_error_code"],
-            "metrics": fallback_metrics,
-            "safe": fallback_safe,
-            "rejection_reason": fallback_reason,
-            "cartesian_path_fraction": float(cartesian_fraction),
-        }
-    )
+    fallback_branch_constraint = _set_local_joint_branch_constraint(group, float(config.max_total_joint_delta_rad))
+    try:
+        for prefix_length in range(len(trajectory_plan.absolute_tcp_targets), 0, -1):
+            group.set_start_state_to_current_state()
+            final_target = trajectory_plan.absolute_tcp_targets[prefix_length - 1]
+            final_target_pose = _make_geometry_pose(final_target)
+            if hasattr(group, "set_position_target"):
+                if hasattr(group, "clear_pose_targets"):
+                    group.clear_pose_targets()
+                group.set_position_target(
+                    [float(final_target.x), float(final_target.y), float(final_target.z)],
+                    trajectory_plan.moveit_end_effector_link,
+                )
+                normalized = _normalize_plan_result(group.plan())
+                candidate = _evaluate_candidate(
+                    name="position_only_fallback",
+                    prefix_length=prefix_length,
+                    trajectory=normalized["trajectory"],
+                    success=bool(normalized["success"]),
+                    planning_time_s=normalized["planning_time_s"],
+                    moveit_error_code=normalized["moveit_error_code"],
+                    cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                    config=config,
+                )
+                if not candidate["success"] and candidate["rejection_reason"] is None:
+                    candidate["rejection_reason"] = "position-only fallback returned no safe plan"
+                candidates.append(candidate)
+                if candidate["safe"]:
+                    break
+
+            seeded_ik = _compute_seeded_ik_joint_target(
+                group,
+                final_target_pose,
+                trajectory_plan.moveit_end_effector_link,
+                float(config.planning_time_s),
+            )
+            if seeded_ik is not None and hasattr(group, "set_joint_value_target"):
+                group.set_joint_value_target(seeded_ik["joint_positions"])
+                normalized = _normalize_plan_result(group.plan())
+                candidate = _evaluate_candidate(
+                    name="ik_joint_target_fallback",
+                    prefix_length=prefix_length,
+                    trajectory=normalized["trajectory"],
+                    success=bool(normalized["success"]),
+                    planning_time_s=normalized["planning_time_s"],
+                    moveit_error_code=normalized["moveit_error_code"],
+                    cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                    config=config,
+                )
+                candidate["ik_solution"] = seeded_ik
+                if not candidate["success"] and candidate["rejection_reason"] is None:
+                    candidate["rejection_reason"] = "seeded IK joint-target fallback returned no safe plan"
+                candidates.append(candidate)
+                if candidate["safe"]:
+                    break
+
+            if hasattr(group, "clear_pose_targets"):
+                group.clear_pose_targets()
+            group.set_pose_target(final_target_pose, trajectory_plan.moveit_end_effector_link)
+            normalized = _normalize_plan_result(group.plan())
+            candidate = _evaluate_candidate(
+                name="final_pose_fallback",
+                prefix_length=prefix_length,
+                trajectory=normalized["trajectory"],
+                success=bool(normalized["success"]),
+                planning_time_s=normalized["planning_time_s"],
+                moveit_error_code=normalized["moveit_error_code"],
+                cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                config=config,
+            )
+            if not candidate["success"] and candidate["rejection_reason"] is None:
+                candidate["rejection_reason"] = "final pose fallback returned no safe plan"
+            candidates.append(candidate)
+            if candidate["safe"]:
+                break
+    finally:
+        if hasattr(group, "clear_path_constraints"):
+            group.clear_path_constraints()
 
     selected_candidate = next((candidate for candidate in candidates if candidate["safe"]), None)
     planning_success = selected_candidate is not None
@@ -738,13 +913,16 @@ def preview_or_execute(
     planning_time_s = selected_candidate["planning_time_s"]
     moveit_error_code = selected_candidate["moveit_error_code"]
     metrics = selected_candidate["metrics"]
+    selected_prefix_length = int(selected_candidate["prefix_length"])
+    selected_targets = trajectory_plan.absolute_tcp_targets[:selected_prefix_length]
 
     outputs = {
         "execution_allowed": bool(execute),
         "planning_success": bool(planning_success),
         "planning_mode": planning_mode,
         "lap_horizon_length": int(trajectory_plan.lap_horizon_length),
-        "selected_horizon_length": int(trajectory_plan.selected_horizon_length),
+        "selected_horizon_length": selected_prefix_length,
+        "planning_prefix_truncated": bool(selected_prefix_length < int(trajectory_plan.selected_horizon_length)),
         "confirmed_action_semantics": trajectory_plan.action_semantics,
         "maximum_total_tcp_displacement_m": float(trajectory_plan.total_requested_tcp_displacement_m),
         "maximum_adjacent_waypoint_translation_m": float(trajectory_plan.maximum_adjacent_waypoint_translation_m),
@@ -757,6 +935,7 @@ def preview_or_execute(
         "candidate_evaluations": [
             {
                 "name": candidate["name"],
+                "prefix_length": candidate["prefix_length"],
                 "success": bool(candidate["success"]),
                 "safe": bool(candidate["safe"]),
                 "rejection_reason": candidate["rejection_reason"],
@@ -764,6 +943,7 @@ def preview_or_execute(
                 "planning_time_s": candidate["planning_time_s"],
                 "cartesian_path_fraction": candidate["cartesian_path_fraction"],
                 "trajectory_metrics": candidate["metrics"],
+                "ik_solution": candidate.get("ik_solution"),
             }
             for candidate in candidates
         ],
@@ -779,7 +959,7 @@ def preview_or_execute(
                 "position": [target.x, target.y, target.z],
                 "quaternion_xyzw": [target.qx, target.qy, target.qz, target.qw],
             }
-            for target in trajectory_plan.absolute_tcp_targets
+            for target in selected_targets
         ],
         "trajectory_metrics": metrics,
         "moveit_request_preview": {
@@ -789,6 +969,7 @@ def preview_or_execute(
             "target_frame": trajectory_plan.moveit_planning_frame,
             "end_effector_link": trajectory_plan.moveit_end_effector_link,
         },
+        "fallback_joint_branch_constraint": fallback_branch_constraint,
         "planned_trajectory_duration_s": metrics["planned_duration_s"],
         "maximum_joint_delta_rad": metrics["maximum_joint_delta_rad"],
         "maximum_adjacent_point_joint_delta_rad": metrics["maximum_adjacent_point_joint_delta_rad"],
@@ -816,7 +997,7 @@ def preview_or_execute(
     group.clear_pose_targets()
     verification = _verify_current_tcp_pose(
         group,
-        trajectory_plan.absolute_tcp_targets[-1],
+        selected_targets[-1],
         tolerance_m=float(config.position_tolerance_m),
     )
     outputs["tcp_completion_verification"] = verification

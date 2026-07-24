@@ -88,17 +88,25 @@ Full official LeRobot export and X-VLA training remain blocked on real demonstra
 Read-only environment check:
 
 ```bash
+docker exec -it abot-piper-noetic bash -lc '
+cd /root/piper-pipeline-testbed
+source /opt/ros/noetic/setup.bash
 python3 piper-on-bunker/scripts/inspect_piper_demo_environment.py \
   --config piper-on-bunker/config/piper_laptop_hardware.yaml
+'
 ```
 
 Manual recording session:
 
 ```bash
+docker exec -it abot-piper-noetic bash -lc '
+cd /root/piper-pipeline-testbed
+source /opt/ros/noetic/setup.bash
 python3 piper-on-bunker/scripts/record_piper_demo.py \
   --config piper-on-bunker/config/piper_laptop_hardware.yaml \
   --dataset-root piper-on-bunker/data/local/piper_xvla_target_v0 \
   --task "Move the gripper toward the marked target."
+'
 ```
 
 Inside the recorder:

@@ -2,6 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
+import sys
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _bootstrap import add_repo_src_to_syspath
+else:
+    from ._bootstrap import add_repo_src_to_syspath
+
+add_repo_src_to_syspath()
 
 from piper_on_bunker.data.lerobot_export import export_raw_dataset_to_lerobot, validate_lerobot_dataset
 

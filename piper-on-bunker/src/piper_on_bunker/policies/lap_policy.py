@@ -730,6 +730,21 @@ def _compute_seeded_ik_joint_target(group, target_pose, end_effector_link: str, 
     return best
 
 
+def _validate_seeded_ik_candidate(seeded_ik: dict, config: LapRuntimeConfig) -> Optional[str]:
+    max_delta = float(seeded_ik.get("max_delta_from_current_rad", float("inf")))
+    if not math.isfinite(max_delta):
+        return "seeded IK candidate has non-finite max_delta_from_current_rad"
+    if max_delta > float(config.max_total_joint_delta_rad):
+        return (
+            f"seeded IK max delta {max_delta:.6f} rad exceeds "
+            f"max_total_joint_delta_rad={float(config.max_total_joint_delta_rad):.6f}"
+        )
+    joint_positions = seeded_ik.get("joint_positions") or []
+    if not all(math.isfinite(float(value)) for value in joint_positions):
+        return "seeded IK candidate has non-finite joint positions"
+    return None
+
+
 def _verify_current_tcp_pose(group, target: Pose, tolerance_m: float) -> dict:
     current = group.get_current_pose("gripper_tcp")
     current_position = [
@@ -978,18 +993,48 @@ def preview_or_execute(
                 float(config.planning_time_s),
             )
             if seeded_ik is not None and hasattr(group, "set_joint_value_target"):
-                group.set_joint_value_target(seeded_ik["joint_positions"])
-                normalized = _normalize_plan_result(group.plan())
-                candidate = _evaluate_candidate(
-                    name="ik_joint_target_fallback",
-                    prefix_length=prefix_length,
-                    trajectory=normalized["trajectory"],
-                    success=bool(normalized["success"]),
-                    planning_time_s=normalized["planning_time_s"],
-                    moveit_error_code=normalized["moveit_error_code"],
-                    cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
-                    config=config,
-                )
+                validation_error = _validate_seeded_ik_candidate(seeded_ik, config)
+                if validation_error is not None:
+                    candidate = {
+                        "name": "ik_joint_target_fallback",
+                        "prefix_length": int(prefix_length),
+                        "trajectory": None,
+                        "success": False,
+                        "planning_time_s": None,
+                        "moveit_error_code": -1,
+                        "metrics": _empty_trajectory_metrics(),
+                        "safe": False,
+                        "rejection_reason": validation_error,
+                        "cartesian_path_fraction": float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                    }
+                else:
+                    try:
+                        group.set_joint_value_target(seeded_ik["joint_positions"])
+                    except Exception as exc:
+                        candidate = {
+                            "name": "ik_joint_target_fallback",
+                            "prefix_length": int(prefix_length),
+                            "trajectory": None,
+                            "success": False,
+                            "planning_time_s": None,
+                            "moveit_error_code": -1,
+                            "metrics": _empty_trajectory_metrics(),
+                            "safe": False,
+                            "rejection_reason": f"seeded IK joint target rejected by MoveIt: {exc}",
+                            "cartesian_path_fraction": float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                        }
+                    else:
+                        normalized = _normalize_plan_result(group.plan())
+                        candidate = _evaluate_candidate(
+                            name="ik_joint_target_fallback",
+                            prefix_length=prefix_length,
+                            trajectory=normalized["trajectory"],
+                            success=bool(normalized["success"]),
+                            planning_time_s=normalized["planning_time_s"],
+                            moveit_error_code=normalized["moveit_error_code"],
+                            cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                            config=config,
+                        )
                 candidate["ik_solution"] = seeded_ik
                 if not candidate["success"] and candidate["rejection_reason"] is None:
                     candidate["rejection_reason"] = "seeded IK joint-target fallback returned no safe plan"

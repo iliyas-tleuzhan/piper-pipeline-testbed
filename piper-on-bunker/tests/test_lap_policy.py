@@ -888,3 +888,127 @@ def test_preview_or_execute_rejects_ik_fallback_when_fk_endpoint_misses_target(m
         "FK endpoint error" in (candidate["rejection_reason"] or "")
         for candidate in result["outputs"]["candidate_evaluations"]
     )
+
+
+def test_preview_or_execute_skips_seeded_ik_candidate_over_joint_delta_limit(monkeypatch):
+    import piper_on_bunker.policies.lap_policy as lap_policy
+
+    class SkipLargeSeedGroup:
+        def __init__(self, name):
+            self.name = name
+
+        def set_start_state_to_current_state(self): pass
+        def set_planning_time(self, value): pass
+        def set_num_planning_attempts(self, value): pass
+        def set_pose_reference_frame(self, value): pass
+        def set_end_effector_link(self, value): pass
+        def set_max_velocity_scaling_factor(self, value): pass
+        def set_max_acceleration_scaling_factor(self, value): pass
+        def get_current_state(self): return object()
+        def get_active_joints(self): return ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+        def get_current_joint_values(self): return [0.0] * 6
+        def get_planning_frame(self): return "dummy_link"
+        def get_end_effector_link(self): return "gripper_tcp"
+        def set_path_constraints(self, constraints): pass
+        def clear_path_constraints(self): pass
+        def compute_cartesian_path(self, waypoints, eef_step, jump_threshold): return _FakeTrajectory([]), 0.1
+        def retime_trajectory(self, state, trajectory, velocity_scaling_factor, acceleration_scaling_factor): return trajectory
+        def clear_pose_targets(self): pass
+        def set_position_target(self, xyz, link): pass
+        def set_joint_value_target(self, values): raise AssertionError("should not attempt MoveIt joint target for oversized seeded IK")
+        def set_pose_target(self, pose, link): pass
+        def plan(self): return False, _FakeTrajectory([]), 0.2, type("Err", (), {"val": -6})()
+        def get_current_pose(self, link):
+            pose = type("PoseStamped", (), {})()
+            pose.pose = type("Pose", (), {})()
+            pose.pose.position = type("Point", (), {"x": 0.19124318537468837, "y": 0.0022620599968891843, "z": 0.22627771846438982})()
+            pose.pose.orientation = type("Quat", (), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0})()
+            return pose
+
+    monkeypatch.setitem(__import__("sys").modules, "moveit_commander", type("MoveIt", (), {"roscpp_initialize": staticmethod(lambda argv: None), "MoveGroupCommander": SkipLargeSeedGroup})())
+    monkeypatch.setitem(__import__("sys").modules, "rospy", type("Rospy", (), {"get_node_uri": staticmethod(lambda: "node"), "init_node": staticmethod(lambda *a, **k: None)})())
+    _install_fake_geometry(monkeypatch)
+    _install_fake_moveit_msgs(monkeypatch)
+    monkeypatch.setattr(lap_policy, "_compute_seeded_ik_joint_target", lambda *a, **k: {
+        "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+        "joint_positions": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        "seed_index": 0,
+        "max_delta_from_current_rad": 0.95,
+    })
+
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {"actions": [[0.002, 0.001, 0.001, 0.0, 0.0, 0.0, 0.0]]},
+        _config(),
+        max_actions=1,
+    )
+    result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is False
+    assert any(
+        "seeded IK max delta" in (candidate["rejection_reason"] or "")
+        for candidate in result["outputs"]["candidate_evaluations"]
+        if candidate["name"] == "ik_joint_target_fallback"
+    )
+
+
+def test_preview_or_execute_catches_moveit_joint_target_rejection(monkeypatch):
+    class RejectJointTargetGroup:
+        def __init__(self, name):
+            self.name = name
+
+        def set_start_state_to_current_state(self): pass
+        def set_planning_time(self, value): pass
+        def set_num_planning_attempts(self, value): pass
+        def set_pose_reference_frame(self, value): pass
+        def set_end_effector_link(self, value): pass
+        def set_max_velocity_scaling_factor(self, value): pass
+        def set_max_acceleration_scaling_factor(self, value): pass
+        def get_current_state(self): return object()
+        def get_active_joints(self): return ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+        def get_current_joint_values(self): return [0.0] * 6
+        def get_planning_frame(self): return "dummy_link"
+        def get_end_effector_link(self): return "gripper_tcp"
+        def set_path_constraints(self, constraints): pass
+        def clear_path_constraints(self): pass
+        def compute_cartesian_path(self, waypoints, eef_step, jump_threshold): return _FakeTrajectory([]), 0.1
+        def retime_trajectory(self, state, trajectory, velocity_scaling_factor, acceleration_scaling_factor): return trajectory
+        def clear_pose_targets(self): pass
+        def set_position_target(self, xyz, link): pass
+        def set_joint_value_target(self, values): raise RuntimeError("Error setting joint target. Is the target within bounds?")
+        def set_pose_target(self, pose, link): pass
+        def plan(self): return False, _FakeTrajectory([]), 0.2, type("Err", (), {"val": -6})()
+        def get_current_pose(self, link):
+            pose = type("PoseStamped", (), {})()
+            pose.pose = type("Pose", (), {})()
+            pose.pose.position = type("Point", (), {"x": 0.19124318537468837, "y": 0.0022620599968891843, "z": 0.22627771846438982})()
+            pose.pose.orientation = type("Quat", (), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0})()
+            return pose
+
+    monkeypatch.setitem(__import__("sys").modules, "moveit_commander", type("MoveIt", (), {"roscpp_initialize": staticmethod(lambda argv: None), "MoveGroupCommander": RejectJointTargetGroup})())
+    monkeypatch.setitem(__import__("sys").modules, "rospy", type("Rospy", (), {"get_node_uri": staticmethod(lambda: "node"), "init_node": staticmethod(lambda *a, **k: None)})())
+    _install_fake_geometry(monkeypatch)
+    _install_fake_moveit_msgs(monkeypatch)
+
+    import piper_on_bunker.policies.lap_policy as lap_policy
+    monkeypatch.setattr(lap_policy, "_compute_seeded_ik_joint_target", lambda *a, **k: {
+        "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+        "joint_positions": [0.2, 0.1, 0.0, 0.0, 0.0, 0.0],
+        "seed_index": 0,
+        "max_delta_from_current_rad": 0.2,
+    })
+
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {"actions": [[0.002, 0.001, 0.001, 0.0, 0.0, 0.0, 0.0]]},
+        _config(),
+        max_actions=1,
+    )
+    result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is False
+    assert any(
+        "joint target rejected by MoveIt" in (candidate["rejection_reason"] or "")
+        for candidate in result["outputs"]["candidate_evaluations"]
+        if candidate["name"] == "ik_joint_target_fallback"
+    )

@@ -572,6 +572,15 @@ def _normalize_plan_result(result):
     }
 
 
+def _empty_trajectory_metrics() -> dict:
+    return {
+        "trajectory_points": 0,
+        "planned_duration_s": 0.0,
+        "maximum_joint_delta_rad": 0.0,
+        "maximum_adjacent_point_joint_delta_rad": 0.0,
+    }
+
+
 def _make_geometry_pose(target: Pose):
     from geometry_msgs.msg import Pose as GeometryPose
 
@@ -633,7 +642,8 @@ def preview_or_execute(
     waypoint_msgs = [_make_geometry_pose(target) for target in trajectory_plan.absolute_tcp_targets]
     cartesian_trajectory = None
     cartesian_fraction = 0.0
-    planning_mode = "cartesian_path"
+    candidates = []
+
     if waypoint_msgs:
         cartesian_trajectory, cartesian_fraction = group.compute_cartesian_path(
             waypoint_msgs,
@@ -647,25 +657,87 @@ def preview_or_execute(
             velocity_scaling_factor=float(motion_profile.velocity_scaling),
             acceleration_scaling_factor=float(motion_profile.acceleration_scaling),
         )
-
-    if not cartesian_trajectory or not getattr(cartesian_trajectory.joint_trajectory, "points", []) or float(cartesian_fraction) < float(config.min_cartesian_path_fraction):
-        planning_mode = "final_pose_fallback"
-        final_target = trajectory_plan.absolute_tcp_targets[-1]
-        group.set_pose_target(_make_geometry_pose(final_target), trajectory_plan.moveit_end_effector_link)
-        normalized = _normalize_plan_result(group.plan())
-        trajectory = normalized["trajectory"]
-        planning_success = bool(normalized["success"])
-        planning_time_s = normalized["planning_time_s"]
-        moveit_error_code = normalized["moveit_error_code"]
+        cartesian_metrics = _trajectory_joint_metrics(cartesian_trajectory)
+        cartesian_reason = None
+        cartesian_safe = True
+        try:
+            _verify_trajectory_metrics(cartesian_metrics, config)
+        except ValueError as exc:
+            cartesian_safe = False
+            cartesian_reason = str(exc)
+        if float(cartesian_fraction) < float(config.min_cartesian_path_fraction):
+            cartesian_safe = False
+            cartesian_reason = (
+                f"cartesian path fraction {float(cartesian_fraction):.6f} below "
+                f"min_cartesian_path_fraction={float(config.min_cartesian_path_fraction):.6f}"
+            )
+        candidates.append(
+            {
+                "name": "cartesian_path",
+                "trajectory": cartesian_trajectory,
+                "success": True,
+                "planning_time_s": None,
+                "moveit_error_code": 1,
+                "metrics": cartesian_metrics,
+                "safe": cartesian_safe,
+                "rejection_reason": cartesian_reason,
+                "cartesian_path_fraction": float(cartesian_fraction),
+            }
+        )
     else:
-        trajectory = cartesian_trajectory
-        planning_success = True
-        planning_time_s = None
-        moveit_error_code = 1
+        candidates.append(
+            {
+                "name": "cartesian_path",
+                "trajectory": None,
+                "success": False,
+                "planning_time_s": None,
+                "moveit_error_code": -1,
+                "metrics": _empty_trajectory_metrics(),
+                "safe": False,
+                "rejection_reason": "cartesian path returned no trajectory",
+                "cartesian_path_fraction": float(cartesian_fraction),
+            }
+        )
 
-    metrics = _trajectory_joint_metrics(trajectory) if planning_success else _trajectory_joint_metrics(type("EmptyTrajectory", (), {"joint_trajectory": type("JT", (), {"points": []})()})())
-    if planning_success:
-        _verify_trajectory_metrics(metrics, config)
+    final_target = trajectory_plan.absolute_tcp_targets[-1]
+    group.set_pose_target(_make_geometry_pose(final_target), trajectory_plan.moveit_end_effector_link)
+    normalized = _normalize_plan_result(group.plan())
+    fallback_trajectory = normalized["trajectory"]
+    fallback_metrics = _trajectory_joint_metrics(fallback_trajectory) if normalized["success"] else _empty_trajectory_metrics()
+    fallback_reason = None
+    fallback_safe = bool(normalized["success"])
+    if fallback_safe:
+        try:
+            _verify_trajectory_metrics(fallback_metrics, config)
+        except ValueError as exc:
+            fallback_safe = False
+            fallback_reason = str(exc)
+    else:
+        fallback_reason = "final pose fallback returned no safe plan"
+    candidates.append(
+        {
+            "name": "final_pose_fallback",
+            "trajectory": fallback_trajectory,
+            "success": bool(normalized["success"]),
+            "planning_time_s": normalized["planning_time_s"],
+            "moveit_error_code": normalized["moveit_error_code"],
+            "metrics": fallback_metrics,
+            "safe": fallback_safe,
+            "rejection_reason": fallback_reason,
+            "cartesian_path_fraction": float(cartesian_fraction),
+        }
+    )
+
+    selected_candidate = next((candidate for candidate in candidates if candidate["safe"]), None)
+    planning_success = selected_candidate is not None
+    if selected_candidate is None:
+        selected_candidate = candidates[-1]
+
+    planning_mode = selected_candidate["name"]
+    trajectory = selected_candidate["trajectory"]
+    planning_time_s = selected_candidate["planning_time_s"]
+    moveit_error_code = selected_candidate["moveit_error_code"]
+    metrics = selected_candidate["metrics"]
 
     outputs = {
         "execution_allowed": bool(execute),
@@ -682,6 +754,19 @@ def preview_or_execute(
         "rejected_waypoint_reason": trajectory_plan.rejected_waypoint_reason,
         "horizon_truncated": bool(trajectory_plan.horizon_truncated),
         "cartesian_path_fraction": float(cartesian_fraction),
+        "candidate_evaluations": [
+            {
+                "name": candidate["name"],
+                "success": bool(candidate["success"]),
+                "safe": bool(candidate["safe"]),
+                "rejection_reason": candidate["rejection_reason"],
+                "moveit_error_code": candidate["moveit_error_code"],
+                "planning_time_s": candidate["planning_time_s"],
+                "cartesian_path_fraction": candidate["cartesian_path_fraction"],
+                "trajectory_metrics": candidate["metrics"],
+            }
+            for candidate in candidates
+        ],
         "velocity_scaling": float(motion_profile.velocity_scaling),
         "acceleration_scaling": float(motion_profile.acceleration_scaling),
         "controller_command_rate_hz": 50.0,
@@ -715,14 +800,7 @@ def preview_or_execute(
         return {
             "success": False,
             "status_code": "PLANNING_FAILURE",
-            "message": "failed to plan a continuous LAP trajectory",
-            "outputs": outputs,
-        }
-    if float(cartesian_fraction) < float(config.min_cartesian_path_fraction) and planning_mode == "cartesian_path":
-        return {
-            "success": False,
-            "status_code": "PLANNING_FAILURE",
-            "message": "cartesian path fraction below configured minimum",
+            "message": "failed to find a safe continuous LAP trajectory candidate",
             "outputs": outputs,
         }
     if not execute:

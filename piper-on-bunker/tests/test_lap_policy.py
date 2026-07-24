@@ -41,8 +41,8 @@ def _config() -> LapRuntimeConfig:
         default_motion_profile="fast",
         workspace_bounds_m={"x": [0.05, 0.60], "y": [-0.35, 0.35], "z": [0.02, 0.55]},
         cartesian_eef_step_m=0.005,
-        cartesian_jump_threshold=0.0,
-        min_cartesian_path_fraction=0.95,
+        cartesian_jump_threshold=1.0,
+        min_cartesian_path_fraction=0.90,
         max_total_tcp_displacement_m=0.20,
         max_total_joint_delta_rad=0.75,
         max_adjacent_joint_delta_rad=0.30,
@@ -339,6 +339,7 @@ def _install_fake_moveit(monkeypatch, *, cartesian_fraction=1.0):
 
         def compute_cartesian_path(self, waypoints, eef_step, jump_threshold):
             executed["waypoint_count"] = len(waypoints)
+            executed["jump_threshold"] = jump_threshold
             return (
                 _FakeTrajectory(
                     [
@@ -384,6 +385,28 @@ def _install_fake_moveit(monkeypatch, *, cartesian_fraction=1.0):
     return executed
 
 
+def _install_fake_geometry(monkeypatch):
+    class _GeomPoint:
+        def __init__(self):
+            self.x = 0.0
+            self.y = 0.0
+            self.z = 0.0
+
+    class _GeomQuat:
+        def __init__(self):
+            self.x = 0.0
+            self.y = 0.0
+            self.z = 0.0
+            self.w = 1.0
+
+    class _GeomPose:
+        def __init__(self):
+            self.position = _GeomPoint()
+            self.orientation = _GeomQuat()
+
+    monkeypatch.setitem(__import__("sys").modules, "geometry_msgs.msg", type("Geom", (), {"Pose": _GeomPose})())
+
+
 def test_preview_or_execute_shadow_never_calls_service(monkeypatch):
     executed = _install_fake_moveit(monkeypatch)
     plan = horizon_to_trajectory_plan(
@@ -398,6 +421,9 @@ def test_preview_or_execute_shadow_never_calls_service(monkeypatch):
     assert result["outputs"]["moveit_request_preview"]["will_call_service"] is False
     assert result["outputs"]["selected_horizon_length"] == 2
     assert executed["waypoint_count"] == 2
+    assert executed["jump_threshold"] == 1.0
+    assert result["outputs"]["planning_mode"] == "cartesian_path"
+    assert result["outputs"]["candidate_evaluations"][0]["safe"] is True
 
 
 def test_preview_or_execute_uses_corrected_tcp_target(monkeypatch):
@@ -478,12 +504,16 @@ def test_preview_or_execute_rejects_joint_flip(monkeypatch):
         def set_max_velocity_scaling_factor(self, value): pass
         def set_max_acceleration_scaling_factor(self, value): pass
         def get_current_state(self): return object()
+        def set_pose_target(self, pose, link): pass
         def compute_cartesian_path(self, waypoints, eef_step, jump_threshold):
             return _FakeTrajectory([_FakeTrajectoryPoint([0.0] * 6, 0.0), _FakeTrajectoryPoint([1.06, 0.0, 0.0, 0.0, 0.0, 0.0], 1.0)]), 1.0
         def retime_trajectory(self, state, trajectory, velocity_scaling_factor, acceleration_scaling_factor): return trajectory
+        def plan(self):
+            return False, _FakeTrajectory([]), 0.2, type("Err", (), {"val": -6})()
 
     monkeypatch.setitem(__import__("sys").modules, "moveit_commander", type("MoveIt", (), {"roscpp_initialize": staticmethod(lambda argv: None), "MoveGroupCommander": FlipGroup})())
     monkeypatch.setitem(__import__("sys").modules, "rospy", type("Rospy", (), {"get_node_uri": staticmethod(lambda: "node"), "init_node": staticmethod(lambda *a, **k: None)})())
+    _install_fake_geometry(monkeypatch)
 
     plan = horizon_to_trajectory_plan(
         _snapshot(),
@@ -492,12 +522,12 @@ def test_preview_or_execute_rejects_joint_flip(monkeypatch):
         _config(),
         max_actions=1,
     )
-    try:
-        preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
-    except ValueError as exc:
-        assert "max joint delta" in str(exc)
-    else:
-        raise AssertionError("expected joint flip rejection")
+    result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is False
+    assert result["status_code"] == "PLANNING_FAILURE"
+    assert result["outputs"]["planning_mode"] == "final_pose_fallback"
+    assert result["outputs"]["candidate_evaluations"][0]["safe"] is False
+    assert "max joint delta" in result["outputs"]["candidate_evaluations"][0]["rejection_reason"]
 
 
 def test_preview_or_execute_falls_back_to_one_final_plan(monkeypatch):
@@ -514,6 +544,8 @@ def test_preview_or_execute_falls_back_to_one_final_plan(monkeypatch):
     assert result["outputs"]["planning_mode"] == "final_pose_fallback"
     assert result["outputs"]["selected_horizon_length"] == 2
     assert executed["planned_with_pose_target"] is True
+    assert result["outputs"]["candidate_evaluations"][0]["safe"] is False
+    assert "below min_cartesian_path_fraction" in result["outputs"]["candidate_evaluations"][0]["rejection_reason"]
 
 
 def test_preview_or_execute_reports_truncated_safe_prefix(monkeypatch):
@@ -541,3 +573,60 @@ def test_preview_or_execute_reports_truncated_safe_prefix(monkeypatch):
     assert result["outputs"]["rejected_waypoint_index"] == 6
     assert result["outputs"]["selected_horizon_length"] == 6
     assert executed["waypoint_count"] == 6
+
+
+def test_preview_or_execute_uses_safe_cartesian_candidate_when_fallback_is_unsafe(monkeypatch):
+    class CartesianPreferredGroup:
+        def __init__(self, name):
+            self.name = name
+            self.pose_target = None
+
+        def set_start_state_to_current_state(self): pass
+        def set_planning_time(self, value): pass
+        def set_num_planning_attempts(self, value): pass
+        def set_pose_reference_frame(self, value): pass
+        def set_end_effector_link(self, value): pass
+        def set_max_velocity_scaling_factor(self, value): pass
+        def set_max_acceleration_scaling_factor(self, value): pass
+        def get_current_state(self): return object()
+        def compute_cartesian_path(self, waypoints, eef_step, jump_threshold):
+            return _FakeTrajectory(
+                [
+                    _FakeTrajectoryPoint([0.0] * 6, 0.0),
+                    _FakeTrajectoryPoint([0.1] * 6, 0.5),
+                    _FakeTrajectoryPoint([0.2] * 6, 1.0),
+                ]
+            ), 0.9166666666666666
+        def retime_trajectory(self, state, trajectory, velocity_scaling_factor, acceleration_scaling_factor): return trajectory
+        def set_pose_target(self, pose, link): self.pose_target = (pose, link)
+        def plan(self):
+            return True, _FakeTrajectory(
+                [
+                    _FakeTrajectoryPoint([0.0] * 6, 0.0),
+                    _FakeTrajectoryPoint([1.4, 0.0, 0.0, 0.0, 0.0, 0.0], 1.0),
+                ]
+            ), 0.2, type("Err", (), {"val": 1})()
+        def get_current_pose(self, link):
+            pose = type("PoseStamped", (), {})()
+            pose.pose = type("Pose", (), {})()
+            pose.pose.position = type("Point", (), {"x": 0.19124318537468837, "y": 0.0022620599968891843, "z": 0.22627771846438982})()
+            pose.pose.orientation = type("Quat", (), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0})()
+            return pose
+
+    monkeypatch.setitem(__import__("sys").modules, "moveit_commander", type("MoveIt", (), {"roscpp_initialize": staticmethod(lambda argv: None), "MoveGroupCommander": CartesianPreferredGroup})())
+    monkeypatch.setitem(__import__("sys").modules, "rospy", type("Rospy", (), {"get_node_uri": staticmethod(lambda: "node"), "init_node": staticmethod(lambda *a, **k: None)})())
+    _install_fake_geometry(monkeypatch)
+
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {"actions": [[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]},
+        _config(),
+        max_actions=16,
+    )
+    result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is True
+    assert result["outputs"]["planning_mode"] == "cartesian_path"
+    assert result["outputs"]["candidate_evaluations"][0]["safe"] is True
+    assert result["outputs"]["candidate_evaluations"][1]["safe"] is False
+    assert "max joint delta" in result["outputs"]["candidate_evaluations"][1]["rejection_reason"]

@@ -931,7 +931,12 @@ def preview_or_execute(
                     )
         else:
             candidate["rejection_reason"] = "cartesian path returned no trajectory"
-        if float(cartesian_fraction) < float(config.min_cartesian_path_fraction):
+        single_waypoint_endpoint_ok = (
+            prefix_length == 1
+            and bool(candidate.get("tcp_endpoint_verification"))
+            and bool(candidate["tcp_endpoint_verification"]["target_reached"])
+        )
+        if float(cartesian_fraction) < float(config.min_cartesian_path_fraction) and not single_waypoint_endpoint_ok:
             candidate["safe"] = False
             candidate["rejection_reason"] = (
                 f"cartesian path fraction {float(cartesian_fraction):.6f} below "

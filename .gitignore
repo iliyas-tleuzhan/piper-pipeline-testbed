@@ -9,6 +9,7 @@ build/
 *.egg-info/
 piper-on-bunker/logs/*
 !piper-on-bunker/logs/.gitkeep
+piper-on-bunker/data/local/
 piper-on-bunker/config/*.local.yaml
 piper-on-bunker/runtime/
 deployment/

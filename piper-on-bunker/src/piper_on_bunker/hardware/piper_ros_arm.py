@@ -98,6 +98,27 @@ class PiperRosArm:
             return SkillResult.build(False, StatusCode.SAFETY_VIOLATION, "named pose must contain six joints", start, {"pose": name})
         return self._call_joint_moveit("/joint_moveit_ctrl_arm", joint_states=joints, joint_endpose=[0.0] * 7, gripper=0.0, start=start, action="move_to_named_pose", extra={"pose": name})
 
+    def move_to_joint_target(self, joint_states, gripper: float, label: str = "move_to_joint_target") -> SkillResult:
+        start = monotonic()
+        joints = [float(value) for value in joint_states]
+        if len(joints) != 6:
+            return SkillResult.build(
+                False,
+                StatusCode.SAFETY_VIOLATION,
+                "joint target must contain six joints",
+                start,
+                {"joint_states": joints, "gripper": float(gripper)},
+            )
+        return self._call_joint_moveit(
+            "/joint_moveit_ctrl_piper",
+            joint_states=joints,
+            joint_endpose=[0.0] * 7,
+            gripper=float(gripper),
+            start=start,
+            action=label,
+            extra={"joint_target": joints, "gripper_target": float(gripper)},
+        )
+
     def move_to_pose(self, pose: Pose) -> SkillResult:
         start = monotonic()
         return self._call_joint_moveit(

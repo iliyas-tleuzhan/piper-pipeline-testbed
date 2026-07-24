@@ -37,6 +37,12 @@ Map joint states by configured joint name. Reject missing or duplicate joints.
 
 For image/depth work, preserve encoding, synchronization assumptions, and transform provenance. A valid 2D detection is not a valid 3D target without verified depth and deprojection.
 
+## Physical VLA Test Handoff
+
+If a shadow-policy or planning workflow reaches the point where one bounded hardware check is justified, stop at a manual handoff. Codex may generate one exact command plus the expected movement, required initial pose, tested model action, completion signal, stop command, and log path, but the user must enter that command manually.
+
+Do not add repeated confirmation flags, do not execute the command during the audit, and do not allow model output to choose speed, acceleration, limits, or duration. If frames, transforms, units, gripper semantics, or command mapping remain unresolved, provide the exact calibration or validation step instead of executable motion.
+
 ## Local Test Pattern
 
 When available, use the established test entrypoint:

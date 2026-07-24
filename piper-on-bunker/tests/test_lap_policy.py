@@ -668,7 +668,7 @@ def test_preview_or_execute_uses_safe_cartesian_candidate_when_fallback_is_unsaf
     assert [c["name"] for c in result["outputs"]["candidate_evaluations"]] == ["cartesian_path"]
 
 
-def test_preview_or_execute_uses_safe_fallback_prefix_when_full_prefix_is_unsafe(monkeypatch):
+def test_preview_or_execute_rejects_direct_pose_when_only_shorter_prefix_would_be_safe(monkeypatch):
     class PrefixFallbackGroup:
         def __init__(self, name):
             self.name = name
@@ -727,12 +727,12 @@ def test_preview_or_execute_uses_safe_fallback_prefix_when_full_prefix_is_unsafe
         max_actions=16,
     )
     result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
-    assert result["success"] is True
+    assert result["success"] is False
     assert result["outputs"]["planning_mode"] == "final_pose_fallback"
-    assert result["outputs"]["selected_horizon_length"] == 2
-    assert result["outputs"]["planning_prefix_truncated"] is True
+    assert result["outputs"]["selected_horizon_length"] == 3
+    assert result["outputs"]["planning_prefix_truncated"] is False
     assert result["outputs"]["candidate_evaluations"][0]["safe"] is False
-    assert result["outputs"]["candidate_evaluations"][-1]["safe"] is True
+    assert result["outputs"]["candidate_evaluations"][-1]["safe"] is False
 
 
 def test_preview_or_execute_execute_requires_enable_preflight(monkeypatch):
@@ -1283,7 +1283,7 @@ def test_preview_or_execute_skips_pose_fallbacks_when_seeded_ik_unavailable(monk
     assert group.position_target_calls == 0
     assert group.pose_target_calls == 0
     assert any(
-        c["name"] == "ik_joint_target_fallback" and c["rejection_reason"] == "seeded IK unavailable; skipped pose-planner fallbacks for this prefix"
+        c["name"] == "ik_joint_target_fallback" and c["rejection_reason"] == "seeded IK unavailable; skipped pose-planner fallbacks for this target"
         for c in result["outputs"]["candidate_evaluations"]
     )
 

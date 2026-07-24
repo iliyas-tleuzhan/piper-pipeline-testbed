@@ -573,8 +573,8 @@ def _candidate_requires_physical_motion(candidate: dict, epsilon_rad: float = 1e
 def _candidate_sort_key(candidate: dict) -> tuple:
     type_preference = {
         "cartesian_path": 3,
-        "position_only_fallback": 2,
-        "ik_joint_target_fallback": 1,
+        "ik_joint_target_fallback": 2,
+        "position_only_fallback": 1,
         "final_pose_fallback": 0,
     }
     metrics = candidate.get("metrics") or {}
@@ -918,88 +918,75 @@ def preview_or_execute(
     waypoint_msgs = [_make_geometry_pose(target) for target in trajectory_plan.absolute_tcp_targets]
     candidates = []
     selected_prefix_length = int(trajectory_plan.selected_horizon_length)
-
-    for prefix_length in range(len(waypoint_msgs), 0, -1):
-        cartesian_trajectory = None
-        cartesian_fraction = 0.0
-        if waypoint_msgs[:prefix_length]:
-            cartesian_trajectory, cartesian_fraction = group.compute_cartesian_path(
-                waypoint_msgs[:prefix_length],
-                float(config.cartesian_eef_step_m),
-                float(config.cartesian_jump_threshold),
-            )
-        candidate = _evaluate_candidate(
-            name="cartesian_path",
-            prefix_length=prefix_length,
-            trajectory=cartesian_trajectory,
-            success=bool(cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", [])),
-            planning_time_s=None,
-            moveit_error_code=1 if cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", []) else -1,
-            cartesian_path_fraction=float(cartesian_fraction),
-            config=config,
+    final_target = trajectory_plan.absolute_tcp_targets[selected_prefix_length - 1]
+    final_target_pose = _make_geometry_pose(final_target)
+    cartesian_fraction = 0.0
+    cartesian_trajectory = None
+    if waypoint_msgs:
+        cartesian_trajectory, cartesian_fraction = group.compute_cartesian_path(
+            waypoint_msgs,
+            float(config.cartesian_eef_step_m),
+            float(config.cartesian_jump_threshold),
         )
-        if candidate["success"]:
-            candidate["trajectory"] = group.retime_trajectory(
-                group.get_current_state(),
-                candidate["trajectory"],
-                velocity_scaling_factor=float(motion_profile.velocity_scaling),
-                acceleration_scaling_factor=float(motion_profile.acceleration_scaling),
-            )
-            candidate["metrics"] = _trajectory_joint_metrics(candidate["trajectory"])
-            candidate["safe"] = True
-            candidate["rejection_reason"] = None
-            try:
-                _verify_trajectory_metrics(candidate["metrics"], config)
-            except ValueError as exc:
-                candidate["safe"] = False
-                candidate["rejection_reason"] = str(exc)
-            candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
-                group,
-                trajectory_plan.absolute_tcp_targets[prefix_length - 1],
-                candidate["trajectory"],
-                tolerance_m=float(config.position_tolerance_m),
-            )
-            if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
-                if not candidate["tcp_endpoint_verification"]["target_reached"]:
-                    candidate["safe"] = False
-                    candidate["rejection_reason"] = (
-                        "planned trajectory FK endpoint error "
-                        f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
-                        f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
-                    )
-        else:
-            candidate["rejection_reason"] = "cartesian path returned no trajectory"
-        single_waypoint_endpoint_ok = (
-            prefix_length == 1
-            and bool(candidate.get("tcp_endpoint_verification"))
-            and bool(candidate["tcp_endpoint_verification"]["target_reached"])
+    candidate = _evaluate_candidate(
+        name="cartesian_path",
+        prefix_length=selected_prefix_length,
+        trajectory=cartesian_trajectory,
+        success=bool(cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", [])),
+        planning_time_s=None,
+        moveit_error_code=1 if cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", []) else -1,
+        cartesian_path_fraction=float(cartesian_fraction),
+        config=config,
+    )
+    if candidate["success"]:
+        candidate["trajectory"] = group.retime_trajectory(
+            group.get_current_state(),
+            candidate["trajectory"],
+            velocity_scaling_factor=float(motion_profile.velocity_scaling),
+            acceleration_scaling_factor=float(motion_profile.acceleration_scaling),
         )
-        if float(cartesian_fraction) < float(config.min_cartesian_path_fraction) and not single_waypoint_endpoint_ok:
+        candidate["metrics"] = _trajectory_joint_metrics(candidate["trajectory"])
+        candidate["safe"] = True
+        candidate["rejection_reason"] = None
+        try:
+            _verify_trajectory_metrics(candidate["metrics"], config)
+        except ValueError as exc:
             candidate["safe"] = False
-            candidate["rejection_reason"] = (
-                f"cartesian path fraction {float(cartesian_fraction):.6f} below "
-                f"min_cartesian_path_fraction={float(config.min_cartesian_path_fraction):.6f}"
-            )
-        candidates.append(candidate)
-        if candidate["safe"]:
-            break
-
-    safe_cartesian_motion_candidates = [
-        candidate
-        for candidate in candidates
-        if candidate["name"] == "cartesian_path" and candidate["safe"] and _candidate_requires_physical_motion(candidate)
-    ]
+            candidate["rejection_reason"] = str(exc)
+        candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
+            group,
+            final_target,
+            candidate["trajectory"],
+            tolerance_m=float(config.position_tolerance_m),
+        )
+        if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
+            if not candidate["tcp_endpoint_verification"]["target_reached"]:
+                candidate["safe"] = False
+                candidate["rejection_reason"] = (
+                    "planned trajectory FK endpoint error "
+                    f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
+                    f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
+                )
+    else:
+        candidate["rejection_reason"] = "cartesian path returned no trajectory"
+    single_waypoint_endpoint_ok = (
+        selected_prefix_length == 1
+        and bool(candidate.get("tcp_endpoint_verification"))
+        and bool(candidate["tcp_endpoint_verification"]["target_reached"])
+    )
+    if float(cartesian_fraction) < float(config.min_cartesian_path_fraction) and not single_waypoint_endpoint_ok:
+        candidate["safe"] = False
+        candidate["rejection_reason"] = (
+            f"cartesian path fraction {float(cartesian_fraction):.6f} below "
+            f"min_cartesian_path_fraction={float(config.min_cartesian_path_fraction):.6f}"
+        )
+    candidates.append(candidate)
 
     fallback_branch_constraint = None
-    if not safe_cartesian_motion_candidates:
-        fallback_branch_constraint = _set_local_joint_branch_constraint(group, float(config.max_total_joint_delta_rad))
     try:
-        for prefix_length in range(len(trajectory_plan.absolute_tcp_targets), 0, -1):
-            if safe_cartesian_motion_candidates:
-                break
+        if not (candidate["safe"] and _candidate_requires_physical_motion(candidate)):
+            fallback_branch_constraint = _set_local_joint_branch_constraint(group, float(config.max_total_joint_delta_rad))
             group.set_start_state_to_current_state()
-            final_target = trajectory_plan.absolute_tcp_targets[prefix_length - 1]
-            final_target_pose = _make_geometry_pose(final_target)
 
             seeded_ik = _compute_seeded_ik_joint_target(
                 group,
@@ -1010,9 +997,9 @@ def preview_or_execute(
             if seeded_ik is not None and hasattr(group, "set_joint_value_target"):
                 validation_error = _validate_seeded_ik_candidate(seeded_ik, config)
                 if validation_error is not None:
-                    candidate = {
+                    ik_candidate = {
                         "name": "ik_joint_target_fallback",
-                        "prefix_length": int(prefix_length),
+                        "prefix_length": int(selected_prefix_length),
                         "trajectory": None,
                         "success": False,
                         "planning_time_s": None,
@@ -1020,15 +1007,15 @@ def preview_or_execute(
                         "metrics": _empty_trajectory_metrics(),
                         "safe": False,
                         "rejection_reason": validation_error,
-                        "cartesian_path_fraction": float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                        "cartesian_path_fraction": float(cartesian_fraction),
                     }
                 else:
                     try:
                         group.set_joint_value_target(seeded_ik["joint_positions"])
                     except Exception as exc:
-                        candidate = {
+                        ik_candidate = {
                             "name": "ik_joint_target_fallback",
-                            "prefix_length": int(prefix_length),
+                            "prefix_length": int(selected_prefix_length),
                             "trajectory": None,
                             "success": False,
                             "planning_time_s": None,
@@ -1036,47 +1023,43 @@ def preview_or_execute(
                             "metrics": _empty_trajectory_metrics(),
                             "safe": False,
                             "rejection_reason": f"seeded IK joint target rejected by MoveIt: {exc}",
-                            "cartesian_path_fraction": float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                            "cartesian_path_fraction": float(cartesian_fraction),
                         }
                     else:
                         normalized = _normalize_plan_result(group.plan())
-                        candidate = _evaluate_candidate(
+                        ik_candidate = _evaluate_candidate(
                             name="ik_joint_target_fallback",
-                            prefix_length=prefix_length,
+                            prefix_length=selected_prefix_length,
                             trajectory=normalized["trajectory"],
                             success=bool(normalized["success"]),
                             planning_time_s=normalized["planning_time_s"],
                             moveit_error_code=normalized["moveit_error_code"],
-                            cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                            cartesian_path_fraction=float(cartesian_fraction),
                             config=config,
                         )
-                candidate["ik_solution"] = seeded_ik
-                if not candidate["success"] and candidate["rejection_reason"] is None:
-                    candidate["rejection_reason"] = "seeded IK joint-target fallback returned no safe plan"
-                if candidate["success"]:
-                    candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
+                ik_candidate["ik_solution"] = seeded_ik
+                if not ik_candidate["success"] and ik_candidate["rejection_reason"] is None:
+                    ik_candidate["rejection_reason"] = "seeded IK joint-target fallback returned no safe plan"
+                if ik_candidate["success"]:
+                    ik_candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
                         group,
                         final_target,
-                        candidate["trajectory"],
+                        ik_candidate["trajectory"],
                         tolerance_m=float(config.position_tolerance_m),
                     )
-                    if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
-                        if not candidate["tcp_endpoint_verification"]["target_reached"]:
-                            candidate["safe"] = False
-                            candidate["rejection_reason"] = (
+                    if ik_candidate["safe"] and ik_candidate["tcp_endpoint_verification"] is not None:
+                        if not ik_candidate["tcp_endpoint_verification"]["target_reached"]:
+                            ik_candidate["safe"] = False
+                            ik_candidate["rejection_reason"] = (
                                 "planned trajectory FK endpoint error "
-                                f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
+                                f"{ik_candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
                                 f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
                             )
-                candidates.append(candidate)
-                if candidate["safe"]:
-                    break
-                if _is_joint_delta_limit_rejection(candidate["rejection_reason"]):
-                    continue
+                candidates.append(ik_candidate)
             else:
-                candidate = {
+                ik_candidate = {
                     "name": "ik_joint_target_fallback",
-                    "prefix_length": int(prefix_length),
+                    "prefix_length": int(selected_prefix_length),
                     "trajectory": None,
                     "success": False,
                     "planning_time_s": None,
@@ -1084,16 +1067,19 @@ def preview_or_execute(
                     "metrics": _empty_trajectory_metrics(),
                     "safe": False,
                     "rejection_reason": "seeded IK unavailable",
-                    "cartesian_path_fraction": float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                    "cartesian_path_fraction": float(cartesian_fraction),
                     "ik_solution": None,
                 }
-                if bool(config.skip_pose_planner_fallbacks_without_seeded_ik):
-                    candidate["rejection_reason"] = "seeded IK unavailable; skipped pose-planner fallbacks for this prefix"
-                    candidates.append(candidate)
-                    continue
-                candidates.append(candidate)
+                candidates.append(ik_candidate)
 
-            if hasattr(group, "set_position_target"):
+            allow_pose_planner_fallbacks = True
+            if _is_joint_delta_limit_rejection(candidates[-1]["rejection_reason"]):
+                allow_pose_planner_fallbacks = False
+            if candidates[-1]["rejection_reason"] == "seeded IK unavailable" and bool(config.skip_pose_planner_fallbacks_without_seeded_ik):
+                candidates[-1]["rejection_reason"] = "seeded IK unavailable; skipped pose-planner fallbacks for this target"
+                allow_pose_planner_fallbacks = False
+
+            if allow_pose_planner_fallbacks and hasattr(group, "set_position_target"):
                 if hasattr(group, "clear_pose_targets"):
                     group.clear_pose_targets()
                 group.set_position_target(
@@ -1103,12 +1089,12 @@ def preview_or_execute(
                 normalized = _normalize_plan_result(group.plan())
                 candidate = _evaluate_candidate(
                     name="position_only_fallback",
-                    prefix_length=prefix_length,
+                    prefix_length=selected_prefix_length,
                     trajectory=normalized["trajectory"],
                     success=bool(normalized["success"]),
                     planning_time_s=normalized["planning_time_s"],
                     moveit_error_code=normalized["moveit_error_code"],
-                    cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
+                    cartesian_path_fraction=float(cartesian_fraction),
                     config=config,
                 )
                 if not candidate["success"] and candidate["rejection_reason"] is None:
@@ -1129,43 +1115,40 @@ def preview_or_execute(
                                 f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
                             )
                 candidates.append(candidate)
-                if candidate["safe"]:
-                    break
 
-            if hasattr(group, "clear_pose_targets"):
-                group.clear_pose_targets()
-            group.set_pose_target(final_target_pose, trajectory_plan.moveit_end_effector_link)
-            normalized = _normalize_plan_result(group.plan())
-            candidate = _evaluate_candidate(
-                name="final_pose_fallback",
-                prefix_length=prefix_length,
-                trajectory=normalized["trajectory"],
-                success=bool(normalized["success"]),
-                planning_time_s=normalized["planning_time_s"],
-                moveit_error_code=normalized["moveit_error_code"],
-                cartesian_path_fraction=float(candidates[0]["cartesian_path_fraction"]) if candidates else 0.0,
-                config=config,
-            )
-            if not candidate["success"] and candidate["rejection_reason"] is None:
-                candidate["rejection_reason"] = "final pose fallback returned no safe plan"
-            if candidate["success"]:
-                candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
-                    group,
-                    final_target,
-                    candidate["trajectory"],
-                    tolerance_m=float(config.position_tolerance_m),
+            if allow_pose_planner_fallbacks:
+                if hasattr(group, "clear_pose_targets"):
+                    group.clear_pose_targets()
+                group.set_pose_target(final_target_pose, trajectory_plan.moveit_end_effector_link)
+                normalized = _normalize_plan_result(group.plan())
+                candidate = _evaluate_candidate(
+                    name="final_pose_fallback",
+                    prefix_length=selected_prefix_length,
+                    trajectory=normalized["trajectory"],
+                    success=bool(normalized["success"]),
+                    planning_time_s=normalized["planning_time_s"],
+                    moveit_error_code=normalized["moveit_error_code"],
+                    cartesian_path_fraction=float(cartesian_fraction),
+                    config=config,
                 )
-                if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
-                    if not candidate["tcp_endpoint_verification"]["target_reached"]:
-                        candidate["safe"] = False
-                        candidate["rejection_reason"] = (
-                            "planned trajectory FK endpoint error "
-                            f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
-                            f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
-                        )
-            candidates.append(candidate)
-            if candidate["safe"]:
-                break
+                if not candidate["success"] and candidate["rejection_reason"] is None:
+                    candidate["rejection_reason"] = "final pose fallback returned no safe plan"
+                if candidate["success"]:
+                    candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
+                        group,
+                        final_target,
+                        candidate["trajectory"],
+                        tolerance_m=float(config.position_tolerance_m),
+                    )
+                    if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
+                        if not candidate["tcp_endpoint_verification"]["target_reached"]:
+                            candidate["safe"] = False
+                            candidate["rejection_reason"] = (
+                                "planned trajectory FK endpoint error "
+                                f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
+                                f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
+                            )
+                candidates.append(candidate)
     finally:
         if hasattr(group, "clear_path_constraints"):
             group.clear_path_constraints()

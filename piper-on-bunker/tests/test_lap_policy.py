@@ -890,7 +890,7 @@ def test_preview_or_execute_rejects_ik_fallback_when_fk_endpoint_misses_target(m
     )
 
 
-def test_preview_or_execute_accepts_single_waypoint_cartesian_when_endpoint_matches(monkeypatch):
+def test_preview_or_execute_rejects_single_waypoint_cartesian_noop_in_shadow(monkeypatch):
     class SingleWaypointCartesianGroup:
         def __init__(self, name):
             self.name = name
@@ -910,9 +910,7 @@ def test_preview_or_execute_accepts_single_waypoint_cartesian_when_endpoint_matc
         def set_path_constraints(self, constraints): pass
         def clear_path_constraints(self): pass
         def compute_cartesian_path(self, waypoints, eef_step, jump_threshold):
-            return _FakeTrajectory(
-                [_FakeTrajectoryPoint([0.0] * 6, 0.0), _FakeTrajectoryPoint([0.1] * 6, 0.5)]
-            ), 0.3333333333333333
+            return _FakeTrajectory([_FakeTrajectoryPoint([0.0] * 6, 0.0)]), 0.3333333333333333
         def retime_trajectory(self, state, trajectory, velocity_scaling_factor, acceleration_scaling_factor): return trajectory
         def clear_pose_targets(self): pass
         def set_position_target(self, xyz, link): pass
@@ -951,10 +949,10 @@ def test_preview_or_execute_accepts_single_waypoint_cartesian_when_endpoint_matc
         max_actions=1,
     )
     result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
-    assert result["success"] is True
-    assert result["status_code"] == "OK"
-    assert result["outputs"]["planning_mode"] == "cartesian_path"
+    assert result["success"] is False
+    assert result["status_code"] == "NO_OP_TRAJECTORY"
     assert result["outputs"]["candidate_evaluations"][0]["safe"] is True
+    assert result["outputs"]["selected_shadow_only_candidate"]["trajectory_metrics"]["trajectory_points"] == 1
 
 
 def test_preview_or_execute_rejects_shadow_only_noop_candidate_in_execute_mode(monkeypatch):
@@ -1038,6 +1036,100 @@ def test_preview_or_execute_rejects_shadow_only_noop_candidate_in_execute_mode(m
     assert result["status_code"] == "NO_OP_TRAJECTORY"
     assert group.execute_called is False
     assert result["outputs"]["selected_shadow_only_candidate"]["trajectory_metrics"]["trajectory_points"] == 1
+
+
+def test_preview_or_execute_prefers_longer_safe_prefix_over_shorter_safe_prefix(monkeypatch):
+    import piper_on_bunker.policies.lap_policy as lap_policy
+
+    class PreferLongerPrefixGroup:
+        def __init__(self, name):
+            self.name = name
+            self._joint_target = None
+
+        def set_start_state_to_current_state(self): pass
+        def set_planning_time(self, value): pass
+        def set_num_planning_attempts(self, value): pass
+        def set_pose_reference_frame(self, value): pass
+        def set_end_effector_link(self, value): pass
+        def set_max_velocity_scaling_factor(self, value): pass
+        def set_max_acceleration_scaling_factor(self, value): pass
+        def get_current_state(self): return object()
+        def get_active_joints(self): return ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+        def get_current_joint_values(self): return [0.0] * 6
+        def get_planning_frame(self): return "dummy_link"
+        def get_end_effector_link(self): return "gripper_tcp"
+        def set_path_constraints(self, constraints): pass
+        def clear_path_constraints(self): pass
+        def compute_cartesian_path(self, waypoints, eef_step, jump_threshold):
+            if len(waypoints) == 1:
+                return _FakeTrajectory(
+                    [_FakeTrajectoryPoint([0.0] * 6, 0.0), _FakeTrajectoryPoint([0.05] * 6, 0.4)]
+                ), 1.0
+            return _FakeTrajectory([]), 0.1
+        def retime_trajectory(self, state, trajectory, velocity_scaling_factor, acceleration_scaling_factor): return trajectory
+        def clear_pose_targets(self): pass
+        def set_position_target(self, xyz, link): pass
+        def set_joint_value_target(self, values): self._joint_target = list(values)
+        def set_pose_target(self, pose, link): pass
+        def plan(self):
+            if self._joint_target is not None:
+                return True, _FakeTrajectory(
+                    [_FakeTrajectoryPoint([0.0] * 6, 0.0), _FakeTrajectoryPoint([0.1] * 6, 0.8)]
+                ), 0.2, type("Err", (), {"val": 1})()
+            return False, _FakeTrajectory([]), 0.2, type("Err", (), {"val": -6})()
+        def execute(self, trajectory, wait=True): return True
+        def stop(self): pass
+        def get_current_pose(self, link):
+            pose = type("PoseStamped", (), {})()
+            pose.pose = type("Pose", (), {})()
+            pose.pose.position = type("Point", (), {"x": 0.19124318537468837, "y": 0.0022620599968891843, "z": 0.22627771846438982})()
+            pose.pose.orientation = type("Quat", (), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0})()
+            return pose
+
+    monkeypatch.setitem(__import__("sys").modules, "moveit_commander", type("MoveIt", (), {"roscpp_initialize": staticmethod(lambda argv: None), "MoveGroupCommander": PreferLongerPrefixGroup})())
+    monkeypatch.setitem(__import__("sys").modules, "rospy", type("Rospy", (), {"get_node_uri": staticmethod(lambda: "node"), "init_node": staticmethod(lambda *a, **k: None)})())
+    _install_fake_geometry(monkeypatch)
+    _install_fake_moveit_msgs(monkeypatch)
+
+    monkeypatch.setattr(
+        lap_policy,
+        "_compute_seeded_ik_joint_target",
+        lambda group, target_pose, end_effector_link, timeout_s: {
+            "joint_names": ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"],
+            "joint_positions": [0.1] * 6,
+            "seed_index": 0,
+            "max_delta_from_current_rad": 0.1,
+        },
+    )
+    monkeypatch.setattr(
+        lap_policy,
+        "_verify_trajectory_tcp_endpoint",
+        lambda group, target, trajectory, tolerance_m: {
+            "measured_position": [target.x, target.y, target.z],
+            "position_error_m": 0.0,
+            "position_tolerance_m": tolerance_m,
+            "target_reached": True,
+        },
+    )
+
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {
+            "actions": [
+                [0.002, 0.001, 0.001, 0.0, 0.0, 0.0, 0.0],
+                [0.004, 0.002, 0.002, 0.0, 0.0, 0.0, 0.0],
+                [0.006, 0.003, 0.003, 0.0, 0.0, 0.0, 0.0],
+            ]
+        },
+        _config(),
+        max_actions=3,
+    )
+    result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is True
+    assert result["status_code"] == "OK"
+    assert result["outputs"]["planning_mode"] == "ik_joint_target_fallback"
+    assert result["outputs"]["selected_horizon_length"] == 3
 
 
 def test_preview_or_execute_skips_seeded_ik_candidate_over_joint_delta_limit(monkeypatch):

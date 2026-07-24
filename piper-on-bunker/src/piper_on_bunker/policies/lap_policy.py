@@ -566,6 +566,22 @@ def _candidate_requires_physical_motion(candidate: dict, epsilon_rad: float = 1e
     )
 
 
+def _candidate_sort_key(candidate: dict) -> tuple:
+    type_preference = {
+        "cartesian_path": 3,
+        "position_only_fallback": 2,
+        "ik_joint_target_fallback": 1,
+        "final_pose_fallback": 0,
+    }
+    metrics = candidate.get("metrics") or {}
+    return (
+        int(candidate.get("prefix_length", 0) or 0),
+        int(type_preference.get(candidate.get("name"), -1)),
+        int(metrics.get("trajectory_points", 0) or 0),
+        float(metrics.get("planned_duration_s", 0.0) or 0.0),
+    )
+
+
 def _normalize_plan_result(result):
     if isinstance(result, tuple):
         success, trajectory, planning_time, error_code = result
@@ -1112,16 +1128,13 @@ def preview_or_execute(
         if hasattr(group, "clear_path_constraints"):
             group.clear_path_constraints()
 
-    selected_candidate = next(
-        (
-            candidate
-            for candidate in candidates
-            if candidate["safe"] and (not execute or _candidate_requires_physical_motion(candidate))
-        ),
-        None,
-    )
+    safe_motion_candidates = [
+        candidate for candidate in candidates if candidate["safe"] and _candidate_requires_physical_motion(candidate)
+    ]
+    selected_candidate = max(safe_motion_candidates, key=_candidate_sort_key) if safe_motion_candidates else None
     planning_success = selected_candidate is not None
-    selected_shadow_candidate = next((candidate for candidate in candidates if candidate["safe"]), None)
+    safe_candidates = [candidate for candidate in candidates if candidate["safe"]]
+    selected_shadow_candidate = max(safe_candidates, key=_candidate_sort_key) if safe_candidates else None
     if selected_candidate is None:
         selected_candidate = candidates[-1]
 
@@ -1195,7 +1208,7 @@ def preview_or_execute(
         "planning_time_s": planning_time_s,
     }
 
-    if execute and selected_shadow_candidate is not None and not _candidate_requires_physical_motion(selected_shadow_candidate):
+    if selected_shadow_candidate is not None and not _candidate_requires_physical_motion(selected_shadow_candidate):
         outputs["selected_shadow_only_candidate"] = {
             "name": selected_shadow_candidate["name"],
             "prefix_length": int(selected_shadow_candidate["prefix_length"]),
@@ -1204,11 +1217,11 @@ def preview_or_execute(
         }
 
     if not planning_success:
-        if execute and selected_shadow_candidate is not None:
+        if selected_shadow_candidate is not None:
             return {
                 "success": False,
                 "status_code": "NO_OP_TRAJECTORY",
-                "message": "found only a shadow-safe no-op trajectory; no physical motion candidate was available",
+                "message": "found only a shadow-safe no-op trajectory; no physically meaningful motion candidate was available",
                 "outputs": outputs,
             }
         return {

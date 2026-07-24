@@ -1,0 +1,18 @@
+server:
+  host: 192.168.1.104
+  port: 8016
+topics:
+  color_image: /table_camera/color/image_raw
+  joint_state: /joint_states_single
+  end_pose: /end_pose
+motion:
+  axis_map: [0, 1, 2]
+  translation_scale: 1.0
+  max_translation_per_action_m: 0.02
+  preserve_orientation: true
+  max_speed_scaling: 0.05
+  max_acceleration_scaling: 0.05
+  workspace_bounds_m:
+    x: [0.05, 0.60]
+    y: [-0.35, 0.35]
+    z: [0.02, 0.55]

@@ -748,6 +748,68 @@ def _verify_current_tcp_pose(group, target: Pose, tolerance_m: float) -> dict:
     }
 
 
+def _verify_trajectory_tcp_endpoint(
+    group,
+    target: Pose,
+    trajectory,
+    tolerance_m: float,
+) -> Optional[dict]:
+    points = list(getattr(getattr(trajectory, "joint_trajectory", None), "points", []) or [])
+    if not points:
+        return None
+    if not hasattr(group, "get_active_joints"):
+        return None
+    try:
+        import rospy
+        from moveit_msgs.msg import RobotState
+        from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest
+    except Exception:
+        return None
+
+    joint_names = [str(name) for name in group.get_active_joints()]
+    final_positions = [float(value) for value in points[-1].positions]
+    if len(final_positions) != len(joint_names):
+        return None
+    try:
+        rospy.wait_for_service("/compute_fk", timeout=2.0)
+        service = rospy.ServiceProxy("/compute_fk", GetPositionFK)
+    except Exception:
+        return None
+
+    request = GetPositionFKRequest()
+    request.header.frame_id = str(group.get_planning_frame())
+    request.fk_link_names = [str(group.get_end_effector_link())]
+    state = RobotState()
+    state.joint_state.name = joint_names
+    state.joint_state.position = final_positions
+    request.robot_state = state
+    try:
+        response = service(request)
+    except Exception:
+        return None
+    if int(getattr(response.error_code, "val", response.error_code)) != 1:
+        return None
+    if not response.pose_stamped:
+        return None
+    pose = response.pose_stamped[0].pose
+    measured_position = [
+        float(pose.position.x),
+        float(pose.position.y),
+        float(pose.position.z),
+    ]
+    error = math.sqrt(
+        sum((float(a) - float(b)) ** 2 for a, b in zip(measured_position, [target.x, target.y, target.z]))
+    )
+    return {
+        "measured_position": measured_position,
+        "position_error_m": error,
+        "position_tolerance_m": float(tolerance_m),
+        "target_reached": bool(error <= tolerance_m),
+        "joint_names": joint_names,
+        "joint_positions": final_positions,
+    }
+
+
 def _enable_piper_driver(rospy) -> dict:
     try:
         from piper_msgs.srv import Enable
@@ -838,6 +900,20 @@ def preview_or_execute(
             except ValueError as exc:
                 candidate["safe"] = False
                 candidate["rejection_reason"] = str(exc)
+            candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
+                group,
+                trajectory_plan.absolute_tcp_targets[prefix_length - 1],
+                candidate["trajectory"],
+                tolerance_m=float(config.position_tolerance_m),
+            )
+            if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
+                if not candidate["tcp_endpoint_verification"]["target_reached"]:
+                    candidate["safe"] = False
+                    candidate["rejection_reason"] = (
+                        "planned trajectory FK endpoint error "
+                        f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
+                        f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
+                    )
         else:
             candidate["rejection_reason"] = "cartesian path returned no trajectory"
         if float(cartesian_fraction) < float(config.min_cartesian_path_fraction):
@@ -876,6 +952,21 @@ def preview_or_execute(
                 )
                 if not candidate["success"] and candidate["rejection_reason"] is None:
                     candidate["rejection_reason"] = "position-only fallback returned no safe plan"
+                if candidate["success"]:
+                    candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
+                        group,
+                        final_target,
+                        candidate["trajectory"],
+                        tolerance_m=float(config.position_tolerance_m),
+                    )
+                    if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
+                        if not candidate["tcp_endpoint_verification"]["target_reached"]:
+                            candidate["safe"] = False
+                            candidate["rejection_reason"] = (
+                                "planned trajectory FK endpoint error "
+                                f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
+                                f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
+                            )
                 candidates.append(candidate)
                 if candidate["safe"]:
                     break
@@ -902,6 +993,21 @@ def preview_or_execute(
                 candidate["ik_solution"] = seeded_ik
                 if not candidate["success"] and candidate["rejection_reason"] is None:
                     candidate["rejection_reason"] = "seeded IK joint-target fallback returned no safe plan"
+                if candidate["success"]:
+                    candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
+                        group,
+                        final_target,
+                        candidate["trajectory"],
+                        tolerance_m=float(config.position_tolerance_m),
+                    )
+                    if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
+                        if not candidate["tcp_endpoint_verification"]["target_reached"]:
+                            candidate["safe"] = False
+                            candidate["rejection_reason"] = (
+                                "planned trajectory FK endpoint error "
+                                f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
+                                f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
+                            )
                 candidates.append(candidate)
                 if candidate["safe"]:
                     break
@@ -922,6 +1028,21 @@ def preview_or_execute(
             )
             if not candidate["success"] and candidate["rejection_reason"] is None:
                 candidate["rejection_reason"] = "final pose fallback returned no safe plan"
+            if candidate["success"]:
+                candidate["tcp_endpoint_verification"] = _verify_trajectory_tcp_endpoint(
+                    group,
+                    final_target,
+                    candidate["trajectory"],
+                    tolerance_m=float(config.position_tolerance_m),
+                )
+                if candidate["safe"] and candidate["tcp_endpoint_verification"] is not None:
+                    if not candidate["tcp_endpoint_verification"]["target_reached"]:
+                        candidate["safe"] = False
+                        candidate["rejection_reason"] = (
+                            "planned trajectory FK endpoint error "
+                            f"{candidate['tcp_endpoint_verification']['position_error_m']:.6f} m exceeds "
+                            f"position_tolerance_m={float(config.position_tolerance_m):.6f}"
+                        )
             candidates.append(candidate)
             if candidate["safe"]:
                 break
@@ -970,6 +1091,7 @@ def preview_or_execute(
                 "cartesian_path_fraction": candidate["cartesian_path_fraction"],
                 "trajectory_metrics": candidate["metrics"],
                 "ik_solution": candidate.get("ik_solution"),
+                "tcp_endpoint_verification": candidate.get("tcp_endpoint_verification"),
             }
             for candidate in candidates
         ],

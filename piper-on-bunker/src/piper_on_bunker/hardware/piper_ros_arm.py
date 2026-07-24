@@ -370,24 +370,53 @@ class PiperRosArm:
 
     def _verify_end_pose(self, joint_endpose, start: float, timeout_s: float) -> SkillResult:
         try:
-            from geometry_msgs.msg import PoseStamped
+            import moveit_commander
         except Exception as exc:
-            return SkillResult.build(False, StatusCode.POSE_NOT_REACHED, "PoseStamped unavailable for end-pose verification", start, {"error": repr(exc)})
+            return SkillResult.build(False, StatusCode.POSE_NOT_REACHED, "moveit_commander unavailable for TCP verification", start, {"error": repr(exc)})
         pos_tol = float(self.safety.get("position_tolerance_m", 0.02))
         deadline = self.rospy.Time.now() + self.rospy.Duration(timeout_s)
         target = [float(value) for value in joint_endpose]
         last = None
+        moveit_commander.roscpp_initialize([])
+        group = moveit_commander.MoveGroupCommander("arm")
         while not self.rospy.is_shutdown() and self.rospy.Time.now() < deadline:
             try:
-                msg = self.rospy.wait_for_message(self.END_POSE_TOPIC, PoseStamped, timeout=0.5)
-                current = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+                current_pose = group.get_current_pose("gripper_tcp")
+                current = [
+                    float(current_pose.pose.position.x),
+                    float(current_pose.pose.position.y),
+                    float(current_pose.pose.position.z),
+                ]
                 last = current
                 distance = sum((float(a) - float(b)) ** 2 for a, b in zip(target[:3], current)) ** 0.5
                 if distance <= pos_tol:
-                    return SkillResult.build(True, StatusCode.OK, "end pose target reached", start, {"measured_position": current, "position_error_m": distance})
+                    return SkillResult.build(
+                        True,
+                        StatusCode.OK,
+                        "TCP target reached",
+                        start,
+                        {
+                            "measured_position": current,
+                            "position_error_m": distance,
+                            "verification_link": "gripper_tcp",
+                            "telemetry_topic": self.END_POSE_TOPIC,
+                        },
+                    )
             except Exception:
                 pass
-        return SkillResult.build(False, StatusCode.POSE_NOT_REACHED, "end pose target was not reached", start, {"target": target, "last_measured_position": last, "position_tolerance_m": pos_tol})
+        return SkillResult.build(
+            False,
+            StatusCode.POSE_NOT_REACHED,
+            "TCP target was not reached",
+            start,
+            {
+                "target": target,
+                "last_measured_position": last,
+                "position_tolerance_m": pos_tol,
+                "verification_link": "gripper_tcp",
+                "telemetry_topic": self.END_POSE_TOPIC,
+            },
+        )
 
     def _load_joint_limits(self) -> dict:
         root = ET.fromstring(self.rospy.get_param("/robot_description"))

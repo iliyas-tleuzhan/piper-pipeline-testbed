@@ -10,8 +10,26 @@ motion:
   translation_scale: 1.0
   max_translation_per_action_m: 0.02
   preserve_orientation: true
-  max_speed_scaling: 0.05
-  max_acceleration_scaling: 0.05
+  default_motion_profile: fast
+  profiles:
+    safe:
+      velocity_scaling: 0.20
+      acceleration_scaling: 0.15
+    normal:
+      velocity_scaling: 0.50
+      acceleration_scaling: 0.35
+    fast:
+      velocity_scaling: 0.80
+      acceleration_scaling: 0.60
+  cartesian_eef_step_m: 0.005
+  cartesian_jump_threshold: 0.0
+  min_cartesian_path_fraction: 0.95
+  max_total_tcp_displacement_m: 0.12
+  max_total_joint_delta_rad: 0.75
+  max_adjacent_joint_delta_rad: 0.30
+  position_tolerance_m: 0.01
+  planning_time_s: 10.0
+  max_state_age_s: 1.0
   workspace_bounds_m:
     x: [0.05, 0.60]
     y: [-0.35, 0.35]

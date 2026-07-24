@@ -5,7 +5,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import yaml
@@ -13,13 +13,19 @@ from PIL import Image
 from websockets.sync.client import connect
 
 from piper_on_bunker.hardware.joint_state import DEFAULT_ARM_JOINT_NAMES, map_joint_state
-from piper_on_bunker.hardware.piper_ros_arm import PiperRosArm
 from piper_on_bunker.models import Pose
 from piper_on_bunker.vendor import msgpack_numpy_compat
 
 SHADOW_BANNER = "SHADOW MODE - NO ROBOT ACTION WILL BE EXECUTED"
 MODEL_NAME = "LAP-3B"
 RESAMPLE_BILINEAR = getattr(getattr(Image, "Resampling", Image), "BILINEAR")
+
+
+@dataclass(frozen=True)
+class MotionProfile:
+    name: str
+    velocity_scaling: float
+    acceleration_scaling: float
 
 
 @dataclass
@@ -33,9 +39,18 @@ class LapRuntimeConfig:
     translation_scale: float
     max_translation_per_action_m: float
     preserve_orientation: bool
-    max_speed_scaling: float
-    max_acceleration_scaling: float
+    motion_profiles: Dict[str, MotionProfile]
+    default_motion_profile: str
     workspace_bounds_m: Dict[str, List[float]]
+    cartesian_eef_step_m: float
+    cartesian_jump_threshold: float
+    min_cartesian_path_fraction: float
+    max_total_tcp_displacement_m: float
+    max_total_joint_delta_rad: float
+    max_adjacent_joint_delta_rad: float
+    position_tolerance_m: float
+    planning_time_s: float
+    max_state_age_s: float
 
 
 @dataclass
@@ -60,11 +75,38 @@ class MoveItCurrentTcpPose:
     rpy_rad: List[float]
 
 
+@dataclass
+class LapTrajectoryPlan:
+    action_semantics: str
+    lap_horizon_length: int
+    selected_horizon_length: int
+    raw_actions: List[List[float]]
+    absolute_tcp_targets: List[Pose]
+    telemetry_end_pose: Dict[str, Any]
+    moveit_current_tcp_pose: Dict[str, Any]
+    moveit_planning_frame: str
+    moveit_end_effector_link: str
+    total_requested_tcp_displacement_m: float
+
+
 def load_lap_config(path: str | Path) -> LapRuntimeConfig:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     server = raw.get("server", {})
     topics = raw.get("topics", {})
     motion = raw.get("motion", {})
+    profile_defaults = {
+        "safe": MotionProfile("safe", 0.20, 0.15),
+        "normal": MotionProfile("normal", 0.50, 0.35),
+        "fast": MotionProfile("fast", 0.80, 0.60),
+    }
+    configured_profiles = {}
+    for name, default_profile in profile_defaults.items():
+        raw_profile = (motion.get("profiles") or {}).get(name, {})
+        configured_profiles[name] = MotionProfile(
+            name=name,
+            velocity_scaling=max(0.0, min(1.0, float(raw_profile.get("velocity_scaling", default_profile.velocity_scaling)))),
+            acceleration_scaling=max(0.0, min(1.0, float(raw_profile.get("acceleration_scaling", default_profile.acceleration_scaling)))),
+        )
     return LapRuntimeConfig(
         host=str(server.get("host", "192.168.1.104")),
         port=int(server.get("port", 8016)),
@@ -75,9 +117,18 @@ def load_lap_config(path: str | Path) -> LapRuntimeConfig:
         translation_scale=float(motion.get("translation_scale", 1.0)),
         max_translation_per_action_m=float(motion.get("max_translation_per_action_m", 0.02)),
         preserve_orientation=bool(motion.get("preserve_orientation", True)),
-        max_speed_scaling=float(motion.get("max_speed_scaling", 0.05)),
-        max_acceleration_scaling=float(motion.get("max_acceleration_scaling", 0.05)),
+        motion_profiles=configured_profiles,
+        default_motion_profile=str(motion.get("default_motion_profile", "fast")),
         workspace_bounds_m=dict(motion.get("workspace_bounds_m", {})),
+        cartesian_eef_step_m=float(motion.get("cartesian_eef_step_m", 0.005)),
+        cartesian_jump_threshold=float(motion.get("cartesian_jump_threshold", 0.0)),
+        min_cartesian_path_fraction=float(motion.get("min_cartesian_path_fraction", 0.95)),
+        max_total_tcp_displacement_m=float(motion.get("max_total_tcp_displacement_m", 0.12)),
+        max_total_joint_delta_rad=float(motion.get("max_total_joint_delta_rad", 0.75)),
+        max_adjacent_joint_delta_rad=float(motion.get("max_adjacent_joint_delta_rad", 0.30)),
+        position_tolerance_m=float(motion.get("position_tolerance_m", 0.01)),
+        planning_time_s=float(motion.get("planning_time_s", 10.0)),
+        max_state_age_s=float(motion.get("max_state_age_s", 1.0)),
     )
 
 
@@ -258,6 +309,115 @@ def clamp_pose_to_workspace(target_xyz: np.ndarray, workspace_bounds_m: Dict[str
     return clamped
 
 
+def get_motion_profile(config: LapRuntimeConfig, profile_name: Optional[str]) -> MotionProfile:
+    selected = profile_name or config.default_motion_profile
+    if selected not in config.motion_profiles:
+        raise ValueError(f"unknown motion profile: {selected}")
+    return config.motion_profiles[selected]
+
+
+def lap_action_semantics() -> str:
+    return (
+        "future_tcp_delta_from_current_state_per_horizon_row"
+    )
+
+
+def _lap_actions_array(response: dict, max_actions: int) -> np.ndarray:
+    actions = np.asarray(response["actions"], dtype=float)
+    if actions.ndim == 1:
+        actions = actions.reshape(1, -1)
+    if actions.ndim != 2:
+        raise ValueError(f"unexpected LAP action shape: {actions.shape}")
+    return actions[: max(1, max_actions)]
+
+
+def _translation_from_action_row(row: np.ndarray, config: LapRuntimeConfig) -> np.ndarray:
+    axis_map = [int(v) for v in config.axis_map]
+    delta_xyz = np.asarray([row[axis_map[0]], row[axis_map[1]], row[axis_map[2]]], dtype=float)
+    if not np.isfinite(delta_xyz).all():
+        raise ValueError("LAP translation channels must be finite")
+    delta_xyz = delta_xyz * float(config.translation_scale)
+    step_norm = float(np.linalg.norm(delta_xyz))
+    if step_norm > float(config.max_translation_per_action_m):
+        raise ValueError(
+            f"LAP action row requests {step_norm:.6f} m, exceeding max_translation_per_action_m={config.max_translation_per_action_m:.6f}"
+        )
+    return delta_xyz
+
+
+def _validate_workspace_point(target_xyz: np.ndarray, workspace_bounds_m: Dict[str, List[float]]) -> None:
+    for index, axis in enumerate(("x", "y", "z")):
+        bounds = workspace_bounds_m.get(axis)
+        if bounds and len(bounds) == 2:
+            if float(target_xyz[index]) < float(bounds[0]) or float(target_xyz[index]) > float(bounds[1]):
+                raise ValueError(
+                    f"target {axis}={float(target_xyz[index]):.6f} m is outside workspace bounds [{float(bounds[0]):.6f}, {float(bounds[1]):.6f}]"
+                )
+
+
+def horizon_to_trajectory_plan(
+    snapshot: LapStateSnapshot,
+    moveit_tcp_pose: MoveItCurrentTcpPose,
+    response: dict,
+    config: LapRuntimeConfig,
+    *,
+    max_actions: int,
+) -> LapTrajectoryPlan:
+    raw_actions = _lap_actions_array(response, max_actions)
+    current_xyz = np.asarray(moveit_tcp_pose.position_m, dtype=float)
+    absolute_targets: List[Pose] = []
+    total_requested_tcp_displacement_m = 0.0
+
+    # Official LAP real-robot postprocessing adds the current state to every row
+    # of the returned chunk independently. That means each row is a future delta
+    # from the current state, not an increment to the previous row.
+    for row in raw_actions:
+        delta_xyz = _translation_from_action_row(row, config)
+        target_xyz = current_xyz + delta_xyz
+        _validate_workspace_point(target_xyz, config.workspace_bounds_m)
+        displacement = float(np.linalg.norm(target_xyz - current_xyz))
+        total_requested_tcp_displacement_m = max(total_requested_tcp_displacement_m, displacement)
+        absolute_targets.append(
+            Pose(
+                x=float(target_xyz[0]),
+                y=float(target_xyz[1]),
+                z=float(target_xyz[2]),
+                qx=float(moveit_tcp_pose.quaternion_xyzw[0]),
+                qy=float(moveit_tcp_pose.quaternion_xyzw[1]),
+                qz=float(moveit_tcp_pose.quaternion_xyzw[2]),
+                qw=float(moveit_tcp_pose.quaternion_xyzw[3]),
+                frame_id=moveit_tcp_pose.planning_frame,
+            )
+        )
+
+    if total_requested_tcp_displacement_m > float(config.max_total_tcp_displacement_m):
+        raise ValueError(
+            "combined LAP horizon requests "
+            f"{total_requested_tcp_displacement_m:.6f} m, exceeding max_total_tcp_displacement_m={config.max_total_tcp_displacement_m:.6f}"
+        )
+
+    return LapTrajectoryPlan(
+        action_semantics=lap_action_semantics(),
+        lap_horizon_length=int(np.asarray(response["actions"]).shape[0] if np.asarray(response["actions"]).ndim > 1 else 1),
+        selected_horizon_length=len(absolute_targets),
+        raw_actions=raw_actions.tolist(),
+        absolute_tcp_targets=absolute_targets,
+        telemetry_end_pose={
+            "position": snapshot.telemetry_end_pose_position_m,
+            "quaternion_xyzw": snapshot.telemetry_end_pose_quaternion_xyzw,
+            "rpy_rad": snapshot.telemetry_end_pose_rpy_rad,
+        },
+        moveit_current_tcp_pose={
+            "position": moveit_tcp_pose.position_m,
+            "quaternion_xyzw": moveit_tcp_pose.quaternion_xyzw,
+            "rpy_rad": moveit_tcp_pose.rpy_rad,
+        },
+        moveit_planning_frame=moveit_tcp_pose.planning_frame,
+        moveit_end_effector_link=moveit_tcp_pose.end_effector_link,
+        total_requested_tcp_displacement_m=total_requested_tcp_displacement_m,
+    )
+
+
 def action_to_target_pose(
     snapshot: LapStateSnapshot,
     moveit_tcp_pose: MoveItCurrentTcpPose,
@@ -265,84 +425,258 @@ def action_to_target_pose(
     config: LapRuntimeConfig,
     max_actions: int = 1,
 ) -> dict:
-    actions = np.asarray(response["actions"], dtype=float)
-    if actions.ndim == 1:
-        first = actions
-        raw_actions = actions.reshape(1, -1)
-    elif actions.ndim == 2:
-        raw_actions = actions[: max(1, max_actions)]
-        first = raw_actions[0]
-    else:
-        raise ValueError(f"unexpected LAP action shape: {actions.shape}")
-    if first.shape[0] < 3:
-        raise ValueError("LAP action must have at least xyz channels")
-    axis_map = [int(v) for v in config.axis_map]
-    delta_xyz = np.asarray([first[axis_map[0]], first[axis_map[1]], first[axis_map[2]]], dtype=float)
-    if not np.isfinite(delta_xyz).all():
-        raise ValueError("LAP translation channels must be finite")
-    delta_xyz = clamp_translation(delta_xyz * config.translation_scale, config.max_translation_per_action_m)
-    current_xyz = np.asarray(moveit_tcp_pose.position_m, dtype=float)
-    unclamped_target = current_xyz + delta_xyz
-    clamped_target = clamp_pose_to_workspace(unclamped_target, config.workspace_bounds_m)
-    quat = moveit_tcp_pose.quaternion_xyzw
-    target_pose = Pose(
-        x=float(clamped_target[0]),
-        y=float(clamped_target[1]),
-        z=float(clamped_target[2]),
-        qx=float(quat[0]),
-        qy=float(quat[1]),
-        qz=float(quat[2]),
-        qw=float(quat[3]),
-        frame_id=moveit_tcp_pose.planning_frame,
-    )
+    plan = horizon_to_trajectory_plan(snapshot, moveit_tcp_pose, response, config, max_actions=max_actions)
+    first = np.asarray(plan.raw_actions[0], dtype=float)
+    delta_xyz = _translation_from_action_row(first, config)
+    first_target = plan.absolute_tcp_targets[0]
     return {
-        "raw_actions": raw_actions.tolist(),
-        "selected_action": first.tolist(),
+        "raw_actions": plan.raw_actions,
+        "selected_action": plan.raw_actions[0],
         "lap_translation_delta": delta_xyz.tolist(),
-        "telemetry_end_pose": {
-            "position": snapshot.telemetry_end_pose_position_m,
-            "quaternion_xyzw": snapshot.telemetry_end_pose_quaternion_xyzw,
-            "rpy_rad": snapshot.telemetry_end_pose_rpy_rad,
-        },
-        "moveit_current_tcp_pose": {
-            "position": moveit_tcp_pose.position_m,
-            "quaternion_xyzw": moveit_tcp_pose.quaternion_xyzw,
-            "rpy_rad": moveit_tcp_pose.rpy_rad,
-        },
-        "moveit_planning_frame": moveit_tcp_pose.planning_frame,
-        "moveit_end_effector_link": moveit_tcp_pose.end_effector_link,
+        "action_semantics": plan.action_semantics,
+        "telemetry_end_pose": plan.telemetry_end_pose,
+        "moveit_current_tcp_pose": plan.moveit_current_tcp_pose,
+        "moveit_planning_frame": plan.moveit_planning_frame,
+        "moveit_end_effector_link": plan.moveit_end_effector_link,
         "proposed_tcp_target": {
-            "position": clamped_target.tolist(),
-            "quaternion_xyzw": quat,
+            "position": [first_target.x, first_target.y, first_target.z],
+            "quaternion_xyzw": [first_target.qx, first_target.qy, first_target.qz, first_target.qw],
         },
         "unclamped_tcp_target": {
-            "position": unclamped_target.tolist(),
-            "quaternion_xyzw": quat,
+            "position": [first_target.x, first_target.y, first_target.z],
+            "quaternion_xyzw": [first_target.qx, first_target.qy, first_target.qz, first_target.qw],
         },
-        "pose": target_pose,
+        "pose": first_target,
+    }
+
+
+def _trajectory_joint_metrics(trajectory) -> dict:
+    points = list(getattr(trajectory.joint_trajectory, "points", []) or [])
+    if not points:
+        return {
+            "trajectory_points": 0,
+            "planned_duration_s": 0.0,
+            "maximum_joint_delta_rad": 0.0,
+            "maximum_adjacent_point_joint_delta_rad": 0.0,
+        }
+    start = np.asarray(points[0].positions, dtype=float)
+    maximum_joint_delta = 0.0
+    maximum_adjacent_delta = 0.0
+    previous = start
+    for point in points:
+        current = np.asarray(point.positions, dtype=float)
+        maximum_joint_delta = max(maximum_joint_delta, float(np.max(np.abs(current - start))))
+        maximum_adjacent_delta = max(maximum_adjacent_delta, float(np.max(np.abs(current - previous))))
+        previous = current
+    return {
+        "trajectory_points": len(points),
+        "planned_duration_s": float(points[-1].time_from_start.to_sec()),
+        "maximum_joint_delta_rad": maximum_joint_delta,
+        "maximum_adjacent_point_joint_delta_rad": maximum_adjacent_delta,
+    }
+
+
+def _verify_trajectory_metrics(metrics: dict, config: LapRuntimeConfig) -> None:
+    if metrics["maximum_joint_delta_rad"] > float(config.max_total_joint_delta_rad):
+        raise ValueError(
+            f"planned trajectory max joint delta {metrics['maximum_joint_delta_rad']:.6f} rad exceeds "
+            f"max_total_joint_delta_rad={config.max_total_joint_delta_rad:.6f}"
+        )
+    if metrics["maximum_adjacent_point_joint_delta_rad"] > float(config.max_adjacent_joint_delta_rad):
+        raise ValueError(
+            f"planned trajectory adjacent-point delta {metrics['maximum_adjacent_point_joint_delta_rad']:.6f} rad exceeds "
+            f"max_adjacent_joint_delta_rad={config.max_adjacent_joint_delta_rad:.6f}"
+        )
+
+
+def _normalize_plan_result(result):
+    if isinstance(result, tuple):
+        success, trajectory, planning_time, error_code = result
+        return {
+            "success": bool(success),
+            "trajectory": trajectory,
+            "planning_time_s": float(planning_time),
+            "moveit_error_code": int(getattr(error_code, "val", error_code)),
+        }
+    trajectory = result
+    points = list(getattr(trajectory.joint_trajectory, "points", []) or [])
+    return {
+        "success": bool(points),
+        "trajectory": trajectory,
+        "planning_time_s": None,
+        "moveit_error_code": 1 if points else -1,
+    }
+
+
+def _make_geometry_pose(target: Pose):
+    from geometry_msgs.msg import Pose as GeometryPose
+
+    pose_msg = GeometryPose()
+    pose_msg.position.x = float(target.x)
+    pose_msg.position.y = float(target.y)
+    pose_msg.position.z = float(target.z)
+    pose_msg.orientation.x = float(target.qx)
+    pose_msg.orientation.y = float(target.qy)
+    pose_msg.orientation.z = float(target.qz)
+    pose_msg.orientation.w = float(target.qw)
+    return pose_msg
+
+
+def _verify_current_tcp_pose(group, target: Pose, tolerance_m: float) -> dict:
+    current = group.get_current_pose("gripper_tcp")
+    current_position = [
+        float(current.pose.position.x),
+        float(current.pose.position.y),
+        float(current.pose.position.z),
+    ]
+    error = math.sqrt(
+        sum((float(a) - float(b)) ** 2 for a, b in zip(current_position, [target.x, target.y, target.z]))
+    )
+    return {
+        "measured_position": current_position,
+        "position_error_m": error,
+        "position_tolerance_m": float(tolerance_m),
+        "target_reached": bool(error <= tolerance_m),
     }
 
 
 def preview_or_execute(
-    target_pose: Pose,
+    trajectory_plan: LapTrajectoryPlan,
     *,
     execute: bool,
-    speed: float,
-    acceleration: float,
+    motion_profile: MotionProfile,
+    config: LapRuntimeConfig,
 ) -> dict:
-    arm = PiperRosArm(
-        physical_motion_enabled=execute,
-        safety={
-            "max_speed_scaling": speed,
-            "max_acceleration_scaling": acceleration,
+    try:
+        import moveit_commander
+        import rospy
+    except Exception as exc:
+        raise RuntimeError("MoveIt trajectory preview requires moveit_commander and rospy") from exc
+
+    if not rospy.get_node_uri():
+        rospy.init_node("lap_piper_motion_preview", anonymous=True, disable_signals=True)
+
+    moveit_commander.roscpp_initialize([])
+    group = moveit_commander.MoveGroupCommander("arm")
+    group.set_start_state_to_current_state()
+    group.set_planning_time(float(config.planning_time_s))
+    group.set_num_planning_attempts(20)
+    group.set_pose_reference_frame(trajectory_plan.moveit_planning_frame)
+    group.set_end_effector_link(trajectory_plan.moveit_end_effector_link)
+    group.set_max_velocity_scaling_factor(float(motion_profile.velocity_scaling))
+    group.set_max_acceleration_scaling_factor(float(motion_profile.acceleration_scaling))
+
+    waypoint_msgs = [_make_geometry_pose(target) for target in trajectory_plan.absolute_tcp_targets]
+    cartesian_trajectory = None
+    cartesian_fraction = 0.0
+    planning_mode = "cartesian_path"
+    if waypoint_msgs:
+        cartesian_trajectory, cartesian_fraction = group.compute_cartesian_path(
+            waypoint_msgs,
+            float(config.cartesian_eef_step_m),
+            float(config.cartesian_jump_threshold),
+        )
+    if cartesian_trajectory and getattr(cartesian_trajectory.joint_trajectory, "points", []):
+        cartesian_trajectory = group.retime_trajectory(
+            group.get_current_state(),
+            cartesian_trajectory,
+            velocity_scaling_factor=float(motion_profile.velocity_scaling),
+            acceleration_scaling_factor=float(motion_profile.acceleration_scaling),
+        )
+
+    if not cartesian_trajectory or not getattr(cartesian_trajectory.joint_trajectory, "points", []) or float(cartesian_fraction) < float(config.min_cartesian_path_fraction):
+        planning_mode = "final_pose_fallback"
+        final_target = trajectory_plan.absolute_tcp_targets[-1]
+        group.set_pose_target(_make_geometry_pose(final_target), trajectory_plan.moveit_end_effector_link)
+        normalized = _normalize_plan_result(group.plan())
+        trajectory = normalized["trajectory"]
+        planning_success = bool(normalized["success"])
+        planning_time_s = normalized["planning_time_s"]
+        moveit_error_code = normalized["moveit_error_code"]
+    else:
+        trajectory = cartesian_trajectory
+        planning_success = True
+        planning_time_s = None
+        moveit_error_code = 1
+
+    metrics = _trajectory_joint_metrics(trajectory) if planning_success else _trajectory_joint_metrics(type("EmptyTrajectory", (), {"joint_trajectory": type("JT", (), {"points": []})()})())
+    if planning_success:
+        _verify_trajectory_metrics(metrics, config)
+
+    outputs = {
+        "execution_allowed": bool(execute),
+        "planning_success": bool(planning_success),
+        "planning_mode": planning_mode,
+        "lap_horizon_length": int(trajectory_plan.lap_horizon_length),
+        "selected_horizon_length": int(trajectory_plan.selected_horizon_length),
+        "confirmed_action_semantics": trajectory_plan.action_semantics,
+        "total_requested_tcp_displacement_m": float(trajectory_plan.total_requested_tcp_displacement_m),
+        "cartesian_path_fraction": float(cartesian_fraction),
+        "velocity_scaling": float(motion_profile.velocity_scaling),
+        "acceleration_scaling": float(motion_profile.acceleration_scaling),
+        "controller_command_rate_hz": 50.0,
+        "moveit_planning_frame": trajectory_plan.moveit_planning_frame,
+        "moveit_end_effector_link": trajectory_plan.moveit_end_effector_link,
+        "moveit_current_tcp_pose": trajectory_plan.moveit_current_tcp_pose,
+        "telemetry_end_pose": trajectory_plan.telemetry_end_pose,
+        "tcp_waypoints": [
+            {
+                "position": [target.x, target.y, target.z],
+                "quaternion_xyzw": [target.qx, target.qy, target.qz, target.qw],
+            }
+            for target in trajectory_plan.absolute_tcp_targets
+        ],
+        "trajectory_metrics": metrics,
+        "moveit_request_preview": {
+            "path_type": planning_mode,
+            "will_call_service": False,
+            "will_execute": bool(execute),
+            "target_frame": trajectory_plan.moveit_planning_frame,
+            "end_effector_link": trajectory_plan.moveit_end_effector_link,
         },
+        "planned_trajectory_duration_s": metrics["planned_duration_s"],
+        "maximum_joint_delta_rad": metrics["maximum_joint_delta_rad"],
+        "maximum_adjacent_point_joint_delta_rad": metrics["maximum_adjacent_point_joint_delta_rad"],
+        "moveit_error_code": moveit_error_code,
+        "planning_time_s": planning_time_s,
+    }
+
+    if not planning_success:
+        return {
+            "success": False,
+            "status_code": "PLANNING_FAILURE",
+            "message": "failed to plan a continuous LAP trajectory",
+            "outputs": outputs,
+        }
+    if float(cartesian_fraction) < float(config.min_cartesian_path_fraction) and planning_mode == "cartesian_path":
+        return {
+            "success": False,
+            "status_code": "PLANNING_FAILURE",
+            "message": "cartesian path fraction below configured minimum",
+            "outputs": outputs,
+        }
+    if not execute:
+        return {
+            "success": True,
+            "status_code": "OK",
+            "message": "continuous LAP trajectory planned in shadow mode",
+            "outputs": outputs,
+        }
+
+    group.execute(trajectory, wait=True)
+    group.stop()
+    group.clear_pose_targets()
+    verification = _verify_current_tcp_pose(
+        group,
+        trajectory_plan.absolute_tcp_targets[-1],
+        tolerance_m=float(config.position_tolerance_m),
     )
-    result = arm.move_to_pose(target_pose)
+    outputs["tcp_completion_verification"] = verification
     return {
-        "success": result.success,
-        "status_code": result.status_code.value,
-        "message": result.message,
-        "outputs": result.outputs,
+        "success": bool(verification["target_reached"]),
+        "status_code": "OK" if verification["target_reached"] else "POSE_NOT_REACHED",
+        "message": "continuous LAP trajectory executed" if verification["target_reached"] else "continuous LAP trajectory executed but TCP target was not reached",
+        "outputs": outputs,
     }
 
 

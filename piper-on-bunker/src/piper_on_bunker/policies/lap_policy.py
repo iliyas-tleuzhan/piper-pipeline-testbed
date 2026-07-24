@@ -554,6 +554,18 @@ def _verify_trajectory_metrics(metrics: dict, config: LapRuntimeConfig) -> None:
         )
 
 
+def _candidate_requires_physical_motion(candidate: dict, epsilon_rad: float = 1e-4, epsilon_s: float = 1e-4) -> bool:
+    metrics = candidate.get("metrics") or {}
+    trajectory_points = int(metrics.get("trajectory_points", 0) or 0)
+    planned_duration_s = float(metrics.get("planned_duration_s", 0.0) or 0.0)
+    maximum_joint_delta_rad = float(metrics.get("maximum_joint_delta_rad", 0.0) or 0.0)
+    return (
+        trajectory_points >= 2
+        and planned_duration_s > float(epsilon_s)
+        and maximum_joint_delta_rad > float(epsilon_rad)
+    )
+
+
 def _normalize_plan_result(result):
     if isinstance(result, tuple):
         success, trajectory, planning_time, error_code = result
@@ -1100,8 +1112,16 @@ def preview_or_execute(
         if hasattr(group, "clear_path_constraints"):
             group.clear_path_constraints()
 
-    selected_candidate = next((candidate for candidate in candidates if candidate["safe"]), None)
+    selected_candidate = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate["safe"] and (not execute or _candidate_requires_physical_motion(candidate))
+        ),
+        None,
+    )
     planning_success = selected_candidate is not None
+    selected_shadow_candidate = next((candidate for candidate in candidates if candidate["safe"]), None)
     if selected_candidate is None:
         selected_candidate = candidates[-1]
 
@@ -1175,7 +1195,22 @@ def preview_or_execute(
         "planning_time_s": planning_time_s,
     }
 
+    if execute and selected_shadow_candidate is not None and not _candidate_requires_physical_motion(selected_shadow_candidate):
+        outputs["selected_shadow_only_candidate"] = {
+            "name": selected_shadow_candidate["name"],
+            "prefix_length": int(selected_shadow_candidate["prefix_length"]),
+            "trajectory_metrics": dict(selected_shadow_candidate["metrics"]),
+            "rejection_reason": "selected safe candidate is a no-op trajectory and would not physically move the robot",
+        }
+
     if not planning_success:
+        if execute and selected_shadow_candidate is not None:
+            return {
+                "success": False,
+                "status_code": "NO_OP_TRAJECTORY",
+                "message": "found only a shadow-safe no-op trajectory; no physical motion candidate was available",
+                "outputs": outputs,
+            }
         return {
             "success": False,
             "status_code": "PLANNING_FAILURE",

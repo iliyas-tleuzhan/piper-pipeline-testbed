@@ -81,6 +81,15 @@ class PiperCommandSample:
     max_velocity: float
     max_acceleration: float
     moveit_service: str
+    execution_mode: str = "dry_run_preview"
+    execution_allowed: bool = False
+    physically_executed: bool = False
+    physical_execution_verified: bool = False
+    service_response_success: Optional[bool] = None
+    target_reached_verified: bool = False
+    gripper_result_verified: Optional[bool] = None
+    state_fresh_before_command: bool = False
+    image_fresh_before_command: bool = False
     moveit_request_preview: Dict[str, Any] = field(default_factory=dict)
     bridge_command_echo: Optional[Dict[str, Any]] = None
 
@@ -98,6 +107,12 @@ class PiperCommandSample:
         data["timestamp_s"] = float(self.timestamp_s)
         data["max_velocity"] = float(self.max_velocity)
         data["max_acceleration"] = float(self.max_acceleration)
+        data["execution_allowed"] = bool(self.execution_allowed)
+        data["physically_executed"] = bool(self.physically_executed)
+        data["physical_execution_verified"] = bool(self.physical_execution_verified)
+        data["target_reached_verified"] = bool(self.target_reached_verified)
+        data["state_fresh_before_command"] = bool(self.state_fresh_before_command)
+        data["image_fresh_before_command"] = bool(self.image_fresh_before_command)
         return data
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ DEFAULT_END_POSE_TOPIC = "/end_pose"
 DEFAULT_COMMAND_ECHO_TOPIC = "/piper_joint_commands"
 DEFAULT_GRIPPER_MIN_M = 0.0
 DEFAULT_GRIPPER_MAX_M = 0.06
+LIVE_DEMO_MODE = "piper_demo_collection"
 
 
 def parse_manual_command(command: str) -> Tuple[str, int]:
@@ -176,6 +178,17 @@ class RecorderTeleopController:
     def execute(self, joint_target_rad, gripper_target_m: float):
         return self.arm.move_to_joint_target(joint_target_rad, gripper_target_m, label="record_demo_step")
 
+    def preview_settings(self) -> dict:
+        speed = float(self.arm.safety.get("max_speed_scaling", 0.1))
+        acceleration = float(self.arm.safety.get("max_acceleration_scaling", speed))
+        return {
+            "moveit_service": "/joint_moveit_ctrl_piper",
+            "joint_step_rad": float(self.arm.safety.get("demo_joint_step_rad", 0.05)),
+            "gripper_step_m": float(self.arm.safety.get("demo_gripper_step_m", 0.005)),
+            "max_velocity_scaling": speed,
+            "max_acceleration_scaling": acceleration,
+        }
+
 
 class PiperDemoRecorder:
     def __init__(
@@ -199,6 +212,8 @@ class PiperDemoRecorder:
         return self.writer.start_episode(task_instruction)
 
     def record_command(self, session: EpisodeSession, command: str, note: Optional[str] = None) -> PiperFrameRecord:
+        if not self.config.physical_motion_enabled:
+            raise RuntimeError("physical demo collection is disabled for this configuration")
         snapshot = self.snapshots.read_snapshot(
             state_timeout_s=float(self.config.safety.get("state_read_timeout_s", 2.0)),
             image_timeout_s=float(self.config.safety.get("camera_read_timeout_s", 2.0)),
@@ -220,6 +235,7 @@ class PiperDemoRecorder:
             raise RuntimeError(result.message)
         echo = self.snapshots.read_command_echo(timeout_s=0.5)
         preview = dict(result.outputs.get("moveit_request_preview") or {})
+        verification = dict(result.outputs.get("pose_reached_verification") or {})
         preview["execution_allowed"] = bool(self.config.physical_motion_enabled)
         frame = PiperFrameRecord(
             frame_index=len(session.frames),
@@ -239,6 +255,15 @@ class PiperDemoRecorder:
                 max_velocity=float(preview.get("max_velocity", 0.0)),
                 max_acceleration=float(preview.get("max_acceleration", 0.0)),
                 moveit_service=str(preview.get("service", "/joint_moveit_ctrl_piper")),
+                execution_mode="physical_execution_verified",
+                execution_allowed=bool(self.config.physical_motion_enabled),
+                physically_executed=True,
+                physical_execution_verified=True,
+                service_response_success=bool(result.outputs.get("service_response_success", True)),
+                target_reached_verified=bool(verification),
+                gripper_result_verified=verification.get("gripper_result_verified"),
+                state_fresh_before_command=snapshot.state.age_s <= self.max_state_age_s,
+                image_fresh_before_command=snapshot.image_age_s <= self.max_image_age_s,
                 moveit_request_preview=preview,
                 bridge_command_echo=echo,
             ),
@@ -252,3 +277,20 @@ class PiperDemoRecorder:
 
 def load_demo_config(path: str | Path) -> PipelineConfig:
     return load_config(path)
+
+
+def is_live_demo_collection_mode(config: PipelineConfig) -> bool:
+    return config.mode == LIVE_DEMO_MODE
+
+
+def require_interactive_live_demo_session(config: PipelineConfig, config_path: str | Path) -> None:
+    if not is_live_demo_collection_mode(config):
+        return
+    if not (os.isatty(0) and os.isatty(1)):
+        raise RuntimeError("live demo collection requires an interactive terminal; refuse noninteractive/background invocation")
+    if not config.physical_motion_enabled:
+        local_path = Path(config_path).with_name(Path(config_path).stem + ".local" + Path(config_path).suffix)
+        raise RuntimeError(
+            "live demo collection config requires explicit local activation before any motion: "
+            + str(local_path)
+        )

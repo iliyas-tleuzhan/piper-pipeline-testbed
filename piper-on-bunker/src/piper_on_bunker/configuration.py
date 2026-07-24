@@ -10,6 +10,7 @@ import yaml
 @dataclass
 class PipelineConfig:
     mode: str = "mock"
+    configured_physical_motion_enabled: bool = False
     physical_motion_enabled: bool = False
     arm_adapter: str = "mock"
     camera_adapter: str = "mock"
@@ -26,20 +27,20 @@ class PipelineConfig:
     def validate(self) -> None:
         if self.mode in {"dry_run", "live_dry_run"} and self.physical_motion_enabled:
             raise ValueError("dry-run configurations may never enable physical motion")
-        if self.mode in {"hardware", "piper_laptop_hardware"} and self.physical_motion_enabled:
+        if self.mode in {"hardware", "piper_laptop_hardware", "piper_demo_collection"} and self.physical_motion_enabled:
             if self.arm_adapter != "piper_ros":
-                raise ValueError("Complete hardware mission requires arm_adapter: piper_ros")
+                raise ValueError("Physical PiPER motion requires arm_adapter: piper_ros")
             local_enabled = bool(self.local_activation.get("physical_motion_enabled", False))
             if not local_enabled:
                 raise ValueError("Physical motion requires ignored local activation")
-            if self.safety.get("require_calibrated_named_poses", True):
+            if self.mode != "piper_demo_collection" and self.safety.get("require_calibrated_named_poses", True):
                 missing = [name for name in REQUIRED_HARDWARE_POSES if not self.named_poses.get(name)]
                 if missing:
                     raise ValueError("Physical motion requires calibrated named poses: " + ", ".join(missing))
             bounds = self.safety.get("workspace_bounds_m", {})
             if not all(axis in bounds for axis in ("x", "y", "z")):
                 raise ValueError("Physical motion requires configured workspace_bounds_m")
-            if not self.transforms:
+            if self.mode != "piper_demo_collection" and not self.transforms:
                 raise ValueError("Physical motion requires a configured camera-to-PiPER transform")
         if self.arm_adapter in {"piper_ros", "abotclaw_api"} and self.mode == "mock":
             raise ValueError("Hardware arm adapters are not allowed in mock mode")
@@ -80,11 +81,13 @@ def load_config(path: str | Path) -> PipelineConfig:
         with local_path.open("r", encoding="utf-8") as fh:
             raw = _deep_merge(raw, yaml.safe_load(fh) or {})
     local_activation = raw.get("local_activation", {})
-    physical_motion_enabled = bool(raw.get("physical_motion_enabled", False)) and bool(
+    configured_physical_motion_enabled = bool(raw.get("physical_motion_enabled", False))
+    physical_motion_enabled = configured_physical_motion_enabled and bool(
         local_activation.get("physical_motion_enabled", False)
     )
     cfg = PipelineConfig(
         mode=raw.get("mode", "mock"),
+        configured_physical_motion_enabled=configured_physical_motion_enabled,
         physical_motion_enabled=physical_motion_enabled,
         arm_adapter=raw.get("arm_adapter", "mock"),
         camera_adapter=raw.get("camera_adapter", "mock"),

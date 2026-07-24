@@ -39,6 +39,7 @@ def validate_episode_directory(
     episode_dir: str | Path,
     max_state_age_s: float = 1.0,
     max_image_age_s: float = 1.0,
+    require_physical_execution: bool = False,
 ) -> EpisodeValidationResult:
     episode_path = Path(episode_dir)
     issues: List[str] = []
@@ -75,14 +76,33 @@ def validate_episode_directory(
             issues.append(f"state dimension invalid at frame {expected_index}")
         if len((command.get("target_joint_positions_rad") or [])) + 1 != ACTION_DIM:
             issues.append(f"action dimension invalid at frame {expected_index}")
+        if require_physical_execution:
+            if not bool(command.get("execution_allowed", False)):
+                issues.append(f"nonphysical execution flag at frame {expected_index}")
+            if command.get("execution_mode") != "physical_execution_verified":
+                issues.append(f"execution mode invalid at frame {expected_index}")
+            if not bool(command.get("physically_executed", False)):
+                issues.append(f"physical execution missing at frame {expected_index}")
+            if not bool(command.get("physical_execution_verified", False)):
+                issues.append(f"physical execution not verified at frame {expected_index}")
+            if not bool(command.get("service_response_success", False)):
+                issues.append(f"MoveIt service success missing at frame {expected_index}")
+            if not bool(command.get("target_reached_verified", False)):
+                issues.append(f"target reached verification missing at frame {expected_index}")
+            if command.get("gripper_result_verified") is False:
+                issues.append(f"gripper verification failed at frame {expected_index}")
+            if not bool(command.get("state_fresh_before_command", False)):
+                issues.append(f"state freshness not confirmed at frame {expected_index}")
+            if not bool(command.get("image_fresh_before_command", False)):
+                issues.append(f"image freshness not confirmed at frame {expected_index}")
     return EpisodeValidationResult(episode_path, not issues, issues, len(frames))
 
 
-def summarize_dataset(root: str | Path) -> DatasetValidationSummary:
+def summarize_dataset(root: str | Path, require_physical_execution: bool = False) -> DatasetValidationSummary:
     dataset_root = Path(root)
     issues: List[str] = []
     results = [
-        validate_episode_directory(path)
+        validate_episode_directory(path, require_physical_execution=require_physical_execution)
         for path in sorted(dataset_root.glob("episode_*"))
         if path.is_dir()
     ]
@@ -123,6 +143,15 @@ def create_synthetic_episode(root: str | Path, image_size: Tuple[int, int] = (96
             max_velocity=0.05,
             max_acceleration=0.05,
             moveit_service="/joint_moveit_ctrl_piper",
+            execution_mode="synthetic_fixture",
+            execution_allowed=False,
+            physically_executed=False,
+            physical_execution_verified=False,
+            service_response_success=False,
+            target_reached_verified=False,
+            gripper_result_verified=None,
+            state_fresh_before_command=True,
+            image_fresh_before_command=True,
         )
         frame = PiperFrameRecord(
             frame_index=frame_index,

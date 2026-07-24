@@ -13,6 +13,7 @@ else:
 add_repo_src_to_syspath()
 
 from piper_on_bunker.data.piper_demo_recorder import PiperDemoRecorder, load_demo_config
+from piper_on_bunker.data.piper_demo_recorder import require_interactive_live_demo_session
 
 
 HELP = """
@@ -37,15 +38,57 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_demo_config(args.config)
+    require_interactive_live_demo_session(config, args.config)
     recorder = PiperDemoRecorder(config=config, dataset_root=args.dataset_root)
     session = None
 
     print("PiPER X-VLA demonstration recorder")
+    print("configured_physical_motion_enabled:", config.configured_physical_motion_enabled)
     print("physical_motion_enabled:", config.physical_motion_enabled)
+    if config.mode == "piper_demo_collection":
+        settings = recorder.controller.preview_settings()
+        print("WARNING: PHYSICAL MOTION IS ENABLED FOR LIVE DEMONSTRATION COLLECTION")
+        print("MoveIt service:", settings["moveit_service"])
+        print("joint_step_rad:", settings["joint_step_rad"])
+        print("gripper_step_m:", settings["gripper_step_m"])
+        print("max_velocity_scaling:", settings["max_velocity_scaling"])
+        print("max_acceleration_scaling:", settings["max_acceleration_scaling"])
+        print("dataset_root:", args.dataset_root)
+        snapshot = recorder.snapshots.read_snapshot(
+            state_timeout_s=float(config.safety.get("state_read_timeout_s", 2.0)),
+            image_timeout_s=float(config.safety.get("camera_read_timeout_s", 2.0)),
+            max_state_age_s=float(config.safety.get("max_state_age_s", 1.0)),
+            max_image_age_s=float(config.safety.get("max_camera_age_s", 1.0)),
+        )
+        print(
+            "live_state_check:",
+            {
+                "joint_state_age_s": snapshot.state.age_s,
+                "image_age_s": snapshot.image_age_s,
+                "camera_topic": snapshot.image_topic,
+                "joint_names": snapshot.state.joint_names,
+            },
+        )
+        checklist = [
+            "Confirm the Bunker is immobilized [y/N]: ",
+            "Confirm the workspace is clear [y/N]: ",
+            "Confirm the emergency stop is reachable [y/N]: ",
+            "Confirm the camera and joint state are live [y/N]: ",
+        ]
+        for prompt in checklist:
+            answer = input(prompt).strip().lower()
+            if answer not in {"y", "yes"}:
+                raise SystemExit("Live demonstration collection aborted before any motion.")
     print(HELP)
 
     while True:
-        raw = input("> ").strip()
+        try:
+            raw = input("> ").strip()
+        except EOFError:
+            print("stdin closed; exiting without sending any robot command")
+            if session and session.frames:
+                session.discard()
+            break
         if not raw:
             continue
         if raw == "quit":

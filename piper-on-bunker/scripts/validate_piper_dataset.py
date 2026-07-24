@@ -20,12 +20,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Validate a local PiPER X-VLA demonstration dataset.")
     parser.add_argument("--dataset-root", required=True)
     parser.add_argument("--episode")
+    parser.add_argument(
+        "--allow-nonphysical",
+        action="store_true",
+        help="Allow synthetic or dry-run fixtures that were not physically executed and verified.",
+    )
     args = parser.parse_args()
+    require_physical_execution = not args.allow_nonphysical
     if args.episode:
-        result = validate_episode_directory(args.episode)
+        result = validate_episode_directory(args.episode, require_physical_execution=require_physical_execution)
         print(json.dumps({"ok": result.ok, "issues": result.issues, "frame_count": result.frame_count}, indent=2))
         return
-    summary = summarize_dataset(args.dataset_root)
+    summary = summarize_dataset(args.dataset_root, require_physical_execution=require_physical_execution)
     print(
         json.dumps(
             {

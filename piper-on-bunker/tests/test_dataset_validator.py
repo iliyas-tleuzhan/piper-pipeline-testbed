@@ -15,3 +15,10 @@ def test_summary_reports_invalid_episode(tmp_path):
     summary = summarize_dataset(dataset_root)
     assert summary.invalid_episodes == 1
     assert any("missing image" in issue for issue in summary.issues)
+
+
+def test_physical_validation_rejects_synthetic_episode(tmp_path):
+    episode_dir = create_synthetic_episode(tmp_path / "dataset")
+    result = validate_episode_directory(episode_dir, require_physical_execution=True)
+    assert not result.ok
+    assert any("nonphysical execution flag" in issue for issue in result.issues)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import xml.etree.ElementTree as ET
 from time import monotonic
 from typing import Optional
 
@@ -15,6 +17,14 @@ class PiperRosArm:
         "/joint_moveit_ctrl_endpose",
         "/joint_moveit_ctrl_gripper",
         "/joint_moveit_ctrl_piper",
+    )
+    JOINT_LIMIT_SOURCE = (
+        "Loaded from live /robot_description joint limits published by the PiPER ROS/MoveIt stack; "
+        "reference URDF: ~/ABot-Claw/robot_layer/arm_piper/agent_server/robot_driver_ros/src/"
+        "piper_ros/src/piper_description/urdf/piper_description.urdf"
+    )
+    GRIPPER_LIMIT_SOURCE = (
+        "ABot-Claw robot_sdk/config.yaml gripper_min=0.0, gripper_max=0.06 meters opening width"
     )
 
     def __init__(self, physical_motion_enabled: bool = False, named_poses: Optional[dict] = None, safety: Optional[dict] = None, expected_joint_names=None) -> None:
@@ -96,7 +106,16 @@ class PiperRosArm:
         joints = [float(value) for value in self.named_poses[name]]
         if len(joints) != 6:
             return SkillResult.build(False, StatusCode.SAFETY_VIOLATION, "named pose must contain six joints", start, {"pose": name})
-        return self._call_joint_moveit("/joint_moveit_ctrl_arm", joint_states=joints, joint_endpose=[0.0] * 7, gripper=0.0, start=start, action="move_to_named_pose", extra={"pose": name})
+        return self._call_joint_moveit(
+            "/joint_moveit_ctrl_arm",
+            joint_states=joints,
+            joint_endpose=[0.0] * 7,
+            gripper=0.0,
+            start=start,
+            action="move_to_named_pose",
+            verification_mode="joint_target",
+            extra={"pose": name},
+        )
 
     def move_to_joint_target(self, joint_states, gripper: float, label: str = "move_to_joint_target") -> SkillResult:
         start = monotonic()
@@ -116,6 +135,7 @@ class PiperRosArm:
             gripper=float(gripper),
             start=start,
             action=label,
+            verification_mode="joint_target",
             extra={"joint_target": joints, "gripper_target": float(gripper)},
         )
 
@@ -128,6 +148,7 @@ class PiperRosArm:
             gripper=0.0,
             start=start,
             action="move_to_pose",
+            verification_mode="end_pose",
             extra={"pose": pose.__dict__},
         )
 
@@ -159,15 +180,60 @@ class PiperRosArm:
             return SkillResult.build(False, StatusCode.NOT_IMPLEMENTED, "no verified physical stop API available", start, {"error": repr(exc)})
         return SkillResult.build(False, StatusCode.NOT_IMPLEMENTED, "MoveIt trajectory action server unavailable; no physical stop API verified", start)
 
-    def _call_joint_moveit(self, service_name: str, joint_states, joint_endpose, gripper: float, start: float, action: str, extra: Optional[dict] = None) -> SkillResult:
+    def _call_joint_moveit(
+        self,
+        service_name: str,
+        joint_states,
+        joint_endpose,
+        gripper: float,
+        start: float,
+        action: str,
+        verification_mode: str = "none",
+        extra: Optional[dict] = None,
+    ) -> SkillResult:
         speed = float(self.safety.get("max_speed_scaling", 0.1))
         speed = max(1e-6, min(0.2, speed))
-        preview = self.build_moveit_request_preview(service_name, joint_states, joint_endpose, gripper, speed, speed)
+        acceleration = float(self.safety.get("max_acceleration_scaling", speed))
+        acceleration = max(1e-6, min(0.2, acceleration))
+        preview = self.build_moveit_request_preview(service_name, joint_states, joint_endpose, gripper, speed, acceleration)
         self.last_preview = preview
         if not self.physical_motion_enabled:
             outputs = {"dry_run": True, "moveit_request_preview": preview}
             outputs.update(extra or {})
             return SkillResult.build(True, StatusCode.OK, action + " dry-run MoveIt request preview", start, outputs)
+        pre_state = self.validate_live_state()
+        if not pre_state.success:
+            return SkillResult.build(
+                False,
+                pre_state.status_code,
+                "fresh joint state required before physical motion",
+                start,
+                {"pre_command_state": pre_state.outputs, **(extra or {})},
+            )
+        joint_limits = self._load_joint_limits()
+        joint_validation_error = self._validate_joint_target(joint_states, joint_limits)
+        if joint_validation_error:
+            return SkillResult.build(
+                False,
+                StatusCode.SAFETY_VIOLATION,
+                joint_validation_error,
+                start,
+                {"joint_limits": joint_limits, "joint_limit_source": self.JOINT_LIMIT_SOURCE, **(extra or {})},
+            )
+        gripper_validation_error = self._validate_gripper_target(gripper)
+        if gripper_validation_error:
+            return SkillResult.build(
+                False,
+                StatusCode.SAFETY_VIOLATION,
+                gripper_validation_error,
+                start,
+                {
+                    "gripper_target": float(gripper),
+                    "gripper_limits_m": [self._gripper_min_m(), self._gripper_max_m()],
+                    "gripper_limit_source": self.GRIPPER_LIMIT_SOURCE,
+                    **(extra or {}),
+                },
+            )
         try:
             from moveit_ctrl.srv import JointMoveitCtrl, JointMoveitCtrlRequest
 
@@ -178,7 +244,7 @@ class PiperRosArm:
             request.gripper = float(gripper)
             request.joint_endpose = list(joint_endpose)
             request.max_velocity = speed
-            request.max_acceleration = speed
+            request.max_acceleration = acceleration
             response = proxy(request)
             ok = bool(getattr(response, "status", False))
             outputs = {
@@ -186,11 +252,23 @@ class PiperRosArm:
                 "service_type": "moveit_ctrl/JointMoveitCtrl",
                 "error_code": int(getattr(response, "error_code", -1)),
                 "max_velocity": speed,
-                "max_acceleration": speed,
+                "max_acceleration": acceleration,
+                "service_response_success": ok,
+                "joint_limits": joint_limits,
+                "joint_limit_source": self.JOINT_LIMIT_SOURCE,
+                "gripper_limits_m": [self._gripper_min_m(), self._gripper_max_m()],
+                "gripper_limit_source": self.GRIPPER_LIMIT_SOURCE,
+                "pre_command_state": pre_state.outputs,
             }
             outputs.update(extra or {})
             if ok:
-                reached = self._verify_reached(action, joint_states, joint_endpose)
+                reached = self._verify_reached(
+                    verification_mode,
+                    joint_states,
+                    joint_endpose,
+                    gripper,
+                    pre_state.outputs,
+                )
                 outputs["pose_reached_verification"] = reached.outputs
                 if not reached.success:
                     return SkillResult.build(False, reached.status_code, reached.message, start, outputs)
@@ -211,19 +289,82 @@ class PiperRosArm:
             "will_call_service": bool(self.physical_motion_enabled),
         }
 
-    def _verify_reached(self, action: str, joint_states, joint_endpose) -> SkillResult:
+    def _verify_reached(self, verification_mode: str, joint_states, joint_endpose, gripper: float, pre_state_outputs: dict) -> SkillResult:
         start = monotonic()
         timeout_s = float(self.safety.get("pose_reached_timeout_s", 5.0))
         tolerance = float(self.safety.get("joint_tolerance_rad", 0.03))
         deadline = self.rospy.Time.now() + self.rospy.Duration(timeout_s)
-        if action == "move_to_named_pose":
+        if verification_mode == "joint_target":
+            initial_positions = list(pre_state_outputs.get("positions", []))
+            initial_error = self._max_abs_joint_error(joint_states, initial_positions)
+            best_error = float("inf")
+            last_positions = initial_positions
+            last_gripper = pre_state_outputs.get("gripper_position")
+            gripper_tol = float(self.safety.get("gripper_tolerance_m", 0.005))
             while not self.rospy.is_shutdown() and self.rospy.Time.now() < deadline:
                 state = self.read_joint_state(timeout_s=0.5)
-                if state.success and within_joint_tolerance(joint_states, state.outputs.get("positions", []), tolerance):
-                    return SkillResult.build(True, StatusCode.OK, "joint target reached", start, state.outputs)
+                if state.success:
+                    measured_positions = list(state.outputs.get("positions", []))
+                    last_positions = measured_positions
+                    last_gripper = state.outputs.get("gripper_position")
+                    current_error = self._max_abs_joint_error(joint_states, measured_positions)
+                    best_error = min(best_error, current_error)
+                    gripper_verified = None
+                    if last_gripper is not None and math.isfinite(float(last_gripper)):
+                        gripper_verified = abs(float(last_gripper) - float(gripper)) <= gripper_tol
+                    if within_joint_tolerance(joint_states, measured_positions, tolerance):
+                        if gripper_verified is False:
+                            return SkillResult.build(
+                                False,
+                                StatusCode.POSE_NOT_REACHED,
+                                "gripper target was not reached",
+                                start,
+                                {
+                                    **state.outputs,
+                                    "commanded_gripper": float(gripper),
+                                    "gripper_tolerance_m": gripper_tol,
+                                    "gripper_result_verified": False,
+                                },
+                            )
+                        return SkillResult.build(
+                            True,
+                            StatusCode.OK,
+                            "joint target reached",
+                            start,
+                            {
+                                **state.outputs,
+                                "commanded": list(joint_states),
+                                "joint_tolerance_rad": tolerance,
+                                "initial_max_abs_error_rad": initial_error,
+                                "best_max_abs_error_rad": best_error,
+                                "gripper_result_verified": gripper_verified,
+                            },
+                        )
                 self.rospy.sleep(0.05)
-            return SkillResult.build(False, StatusCode.POSE_NOT_REACHED, "joint target was not reached", start, {"commanded": list(joint_states), "joint_tolerance_rad": tolerance})
-        if action == "move_to_pose":
+            final_error = self._max_abs_joint_error(joint_states, last_positions)
+            return SkillResult.build(
+                False,
+                StatusCode.POSE_NOT_REACHED,
+                "joint target was not reached",
+                start,
+                {
+                    "commanded": list(joint_states),
+                    "joint_tolerance_rad": tolerance,
+                    "initial_max_abs_error_rad": initial_error,
+                    "best_max_abs_error_rad": best_error,
+                    "final_max_abs_error_rad": final_error,
+                    "lack_of_progress": best_error >= max(0.0, initial_error - 0.002),
+                    "last_measured_positions": last_positions,
+                    "commanded_gripper": float(gripper),
+                    "last_measured_gripper": last_gripper,
+                    "gripper_result_verified": (
+                        None
+                        if last_gripper is None
+                        else abs(float(last_gripper) - float(gripper)) <= gripper_tol
+                    ),
+                },
+            )
+        if verification_mode == "end_pose":
             return self._verify_end_pose(joint_endpose, start, timeout_s)
         return SkillResult.build(True, StatusCode.OK, "no pose verification required", start)
 
@@ -247,3 +388,57 @@ class PiperRosArm:
             except Exception:
                 pass
         return SkillResult.build(False, StatusCode.POSE_NOT_REACHED, "end pose target was not reached", start, {"target": target, "last_measured_position": last, "position_tolerance_m": pos_tol})
+
+    def _load_joint_limits(self) -> dict:
+        root = ET.fromstring(self.rospy.get_param("/robot_description"))
+        limits = {}
+        wanted = set(self.expected_joint_names)
+        for joint in root.findall("joint"):
+            name = joint.attrib.get("name")
+            if name not in wanted:
+                continue
+            limit = joint.find("limit")
+            if limit is None:
+                continue
+            limits[name] = (
+                float(limit.attrib.get("lower", "-3.141592653589793")),
+                float(limit.attrib.get("upper", "3.141592653589793")),
+            )
+        missing = [name for name in self.expected_joint_names if name not in limits]
+        if missing:
+            raise RuntimeError("missing live joint limits for " + ", ".join(missing))
+        return limits
+
+    def _validate_joint_target(self, joint_states, joint_limits: dict) -> Optional[str]:
+        if len(joint_states) != len(self.expected_joint_names):
+            return "joint target length does not match expected arm joints"
+        for name, value in zip(self.expected_joint_names, joint_states):
+            scalar = float(value)
+            if not math.isfinite(scalar):
+                return f"{name} target must be finite"
+            lower, upper = joint_limits[name]
+            if scalar < lower or scalar > upper:
+                return f"{name} target {scalar:.6f} rad is outside verified joint limits [{lower:.6f}, {upper:.6f}]"
+        return None
+
+    def _validate_gripper_target(self, gripper: float) -> Optional[str]:
+        scalar = float(gripper)
+        if not math.isfinite(scalar):
+            return "gripper target must be finite"
+        lower = self._gripper_min_m()
+        upper = self._gripper_max_m()
+        if scalar < lower or scalar > upper:
+            return f"gripper target {scalar:.6f} m is outside verified live range [{lower:.6f}, {upper:.6f}]"
+        return None
+
+    def _gripper_min_m(self) -> float:
+        return float(self.safety.get("gripper_min_m", 0.0))
+
+    def _gripper_max_m(self) -> float:
+        return float(self.safety.get("gripper_max_m", 0.06))
+
+    @staticmethod
+    def _max_abs_joint_error(commanded, measured) -> float:
+        if len(commanded) != len(measured):
+            return float("inf")
+        return max(abs(float(a) - float(b)) for a, b in zip(commanded, measured)) if commanded else 0.0

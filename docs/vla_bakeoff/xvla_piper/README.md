@@ -85,6 +85,26 @@ Full official LeRobot export and X-VLA training remain blocked on real demonstra
 
 ## First human collection workflow
 
+Why the sidecar wrapper must keep stdin open:
+
+- the recorder is interactive and uses `input()`
+- `docker run --rm` without `-i` closes stdin immediately, which causes an `EOFError`
+- `tools/run_in_noetic_container.sh` now always uses Docker `-i` and adds `-t` only when launched from a real terminal
+- that keeps interactive collection usable while preserving noninteractive helpers such as `--help`, validation, replay, and export
+
+Configuration split:
+
+- `piper-on-bunker/config/piper_laptop_hardware.yaml`
+  - read-only inspection and dry-run-safe hardware config
+  - committed `physical_motion_enabled: false`
+- `piper-on-bunker/config/piper_laptop_demo_collection.yaml`
+  - dedicated live manual demonstration-collection config
+  - declares physical intent, but still requires an ignored local activation file before any motion
+- `piper-on-bunker/config/piper_laptop_demo_collection.local.yaml`
+  - ignored local activation checkpoint
+  - create it from `piper_laptop_demo_collection.local.example.yaml`
+  - set `local_activation.physical_motion_enabled: true` only immediately before a supervised collection session
+
 Read-only environment check:
 
 ```bash
@@ -93,7 +113,7 @@ Read-only environment check:
     --config piper-on-bunker/config/piper_laptop_hardware.yaml
 ```
 
-Manual recording session:
+Read-only recorder startup check:
 
 ```bash
 ./tools/run_in_noetic_container.sh \
@@ -103,14 +123,113 @@ Manual recording session:
     --task "Move the gripper toward the marked target."
 ```
 
-Why this wrapper exists:
+That read-only command may be used to verify `status` and `quit`. It must not be used to collect real demonstrations.
 
-- the running `abot-piper-noetic` container currently mounts `~/ABot-Claw` only
-- `docker exec` into that container would write the demo dataset into an ephemeral
-  container filesystem copy of `~/piper-pipeline-testbed`
-- the wrapper launches a short-lived ROS-enabled sidecar from the same image with
-  the testbed bind-mounted, so `piper-on-bunker/data/local/piper_xvla_target_v0`
-  persists directly on the host
+Live human collection command:
+
+```bash
+./tools/run_in_noetic_container.sh \
+  python3 piper-on-bunker/scripts/record_piper_demo.py \
+    --config piper-on-bunker/config/piper_laptop_demo_collection.yaml \
+    --dataset-root piper-on-bunker/data/local/piper_xvla_target_v0 \
+    --task "Move the gripper toward the marked target."
+```
+
+Before the live command is allowed to enter the collection loop, it now requires:
+
+- an interactive terminal
+- the ignored local activation file for the live config
+- live camera and joint-state freshness checks
+- operator confirmation that:
+  - the Bunker is immobilized
+  - the workspace is clear
+  - the emergency stop is reachable
+  - the camera and joint state are live
+
+The recorder prints a prominent startup warning showing:
+
+- physical motion is enabled
+- MoveIt service being used
+- joint step size
+- gripper step size
+- maximum speed scaling
+- maximum acceleration scaling
+- dataset output path
+
+Recorded frames are tagged as either:
+
+- `dry_run_preview`
+- `synthetic_fixture`
+- `physical_execution_verified`
+
+Only `physical_execution_verified` frames are valid for real training.
+
+Persistent host dataset location:
+
+`~/piper-pipeline-testbed/piper-on-bunker/data/local/piper_xvla_target_v0/`
+
+The live recorder now verifies before saving a frame that:
+
+- joint state was fresh before the command
+- camera image was fresh before the command
+- the six-joint target was finite and inside verified PiPER joint limits
+- the gripper target was finite and inside the verified 0.0 to 0.06 m live range
+- the MoveIt service returned success
+- the resulting live arm state reached the commanded joint target within tolerance and timeout
+- gripper verification passed where live gripper feedback was available
+
+If any of those checks fail, the frame is not appended.
+
+Abort and discard rules:
+
+- `abort` discards the active episode
+- `quit` exits without sending a command
+- if stdin closes unexpectedly, the recorder exits without sending a command
+- failed command attempts do not append a frame
+
+To verify that a saved frame was physically executed rather than previewed, inspect `episode.json` and confirm:
+
+- `command.execution_allowed: true`
+- `command.execution_mode: "physical_execution_verified"`
+- `command.physically_executed: true`
+- `command.physical_execution_verified: true`
+- `command.target_reached_verified: true`
+- `command.service_response_success: true`
+
+Validation for a real training dataset:
+
+```bash
+./tools/run_in_noetic_container.sh \
+  python3 piper-on-bunker/scripts/validate_piper_dataset.py \
+    --dataset-root piper-on-bunker/data/local/piper_xvla_target_v0
+```
+
+Synthetic or dry-run fixture validation only:
+
+```bash
+./tools/run_in_noetic_container.sh \
+  python3 piper-on-bunker/scripts/validate_piper_dataset.py \
+    --dataset-root piper-on-bunker/data/local/piper_xvla_target_v0 \
+    --allow-nonphysical
+```
+
+Replay:
+
+```bash
+./tools/run_in_noetic_container.sh \
+  python3 piper-on-bunker/scripts/replay_piper_dataset_readonly.py \
+    --dataset-root piper-on-bunker/data/local/piper_xvla_target_v0
+```
+
+LeRobot export:
+
+```bash
+./tools/run_in_noetic_container.sh \
+  python3 piper-on-bunker/scripts/export_lerobot_dataset.py \
+    --raw-root piper-on-bunker/data/local/piper_xvla_target_v0 \
+    --export-root piper-on-bunker/data/local/piper_xvla_target_v0_lerobot \
+    --validate
+```
 
 Inside the recorder:
 

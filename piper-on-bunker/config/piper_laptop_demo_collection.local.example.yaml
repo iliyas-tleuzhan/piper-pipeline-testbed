@@ -1,0 +1,7 @@
+# Copy to piper_laptop_demo_collection.local.yaml on the PiPER laptop only.
+# This ignored local file is required before the live demo collection config can move hardware.
+local_activation:
+  physical_motion_enabled: false
+  operator: ""
+  calibrated_on: ""
+  acknowledgement: "I understand this will move the physical PiPER arm for manual demonstration collection."

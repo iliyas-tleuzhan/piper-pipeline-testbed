@@ -33,13 +33,18 @@ if [[ -z "${IMAGE}" ]]; then
 fi
 
 CMD_STRING="$(printf '%q ' "$@")"
+DOCKER_RUN_ARGS=(--rm -i)
+
+if [[ -t 0 && -t 1 ]]; then
+  DOCKER_RUN_ARGS+=(-t)
+fi
 
 echo "Using image: ${IMAGE}"
 echo "Mounting repo: ${REPO_ROOT} -> /root/piper-pipeline-testbed"
 echo "Mounting ABot-Claw: ${ABOT_ROOT} -> /root/ABot-Claw"
 echo "Executing: ${CMD_STRING}"
 
-docker run --rm \
+exec docker run "${DOCKER_RUN_ARGS[@]}" \
   --network host \
   -v "${ABOT_ROOT}:/root/ABot-Claw" \
   -v "${REPO_ROOT}:/root/piper-pipeline-testbed" \

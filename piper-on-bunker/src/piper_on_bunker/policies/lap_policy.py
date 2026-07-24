@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
-import msgpack
 import numpy as np
 import yaml
 from PIL import Image
@@ -43,13 +42,22 @@ class LapRuntimeConfig:
 class LapStateSnapshot:
     image_rgb: np.ndarray
     image_stamp_s: float
-    pose_position_m: List[float]
-    pose_quaternion_xyzw: List[float]
-    pose_rpy_rad: List[float]
+    telemetry_end_pose_position_m: List[float]
+    telemetry_end_pose_quaternion_xyzw: List[float]
+    telemetry_end_pose_rpy_rad: List[float]
     joint_positions_rad: List[float]
     gripper_m: float
     joint_stamp_s: float
     end_pose_stamp_s: float
+
+
+@dataclass
+class MoveItCurrentTcpPose:
+    planning_frame: str
+    end_effector_link: str
+    position_m: List[float]
+    quaternion_xyzw: List[float]
+    rpy_rad: List[float]
 
 
 def load_lap_config(path: str | Path) -> LapRuntimeConfig:
@@ -126,8 +134,8 @@ def normalize_gripper_width(gripper_m: float) -> float:
 
 
 def build_lap_request(snapshot: LapStateSnapshot, instruction: str) -> dict:
-    rot6d = euler_to_rot6d(snapshot.pose_rpy_rad)
-    cartesian_position = snapshot.pose_position_m + rot6d
+    rot6d = euler_to_rot6d(snapshot.telemetry_end_pose_rpy_rad)
+    cartesian_position = snapshot.telemetry_end_pose_position_m + rot6d
     gripper_position = np.asarray([normalize_gripper_width(snapshot.gripper_m)], dtype=np.float32)
     request = {
         "observation": {
@@ -136,7 +144,7 @@ def build_lap_request(snapshot: LapStateSnapshot, instruction: str) -> dict:
             "joint_position": np.asarray(snapshot.joint_positions_rad, dtype=np.float32),
             "gripper_position": gripper_position,
             "state": np.asarray(cartesian_position + gripper_position.tolist(), dtype=np.float32),
-            "euler": np.asarray(snapshot.pose_rpy_rad, dtype=np.float32),
+            "euler": np.asarray(snapshot.telemetry_end_pose_rpy_rad, dtype=np.float32),
         },
         "prompt": instruction,
     }
@@ -167,13 +175,50 @@ def capture_live_snapshot(config: LapRuntimeConfig, timeout_s: float = 5.0) -> L
     return LapStateSnapshot(
         image_rgb=image_rgb,
         image_stamp_s=float(color.header.stamp.to_sec()),
-        pose_position_m=[float(p.x), float(p.y), float(p.z)],
-        pose_quaternion_xyzw=quat,
-        pose_rpy_rad=quaternion_to_rpy_rad(*quat),
+        telemetry_end_pose_position_m=[float(p.x), float(p.y), float(p.z)],
+        telemetry_end_pose_quaternion_xyzw=quat,
+        telemetry_end_pose_rpy_rad=quaternion_to_rpy_rad(*quat),
         joint_positions_rad=[float(v) for v in mapped.arm_positions],
         gripper_m=float(mapped.gripper_position or 0.0),
         joint_stamp_s=float(joint.header.stamp.to_sec()),
         end_pose_stamp_s=float(pose.header.stamp.to_sec()),
+    )
+
+
+def get_moveit_current_tcp_pose(
+    group_name: str = "arm",
+    end_effector_link: str = "gripper_tcp",
+    timeout_s: float = 10.0,
+) -> MoveItCurrentTcpPose:
+    try:
+        import moveit_commander
+        import rospy
+    except Exception as exc:
+        raise RuntimeError("MoveIt TCP pose capture requires moveit_commander and rospy") from exc
+
+    if not rospy.get_node_uri():
+        rospy.init_node("lap_piper_moveit_pose", anonymous=True, disable_signals=True)
+
+    moveit_commander.roscpp_initialize([])
+    group = moveit_commander.MoveGroupCommander(group_name)
+    group.set_planning_time(float(timeout_s))
+    current = group.get_current_pose(end_effector_link)
+    quaternion_xyzw = [
+        float(current.pose.orientation.x),
+        float(current.pose.orientation.y),
+        float(current.pose.orientation.z),
+        float(current.pose.orientation.w),
+    ]
+    return MoveItCurrentTcpPose(
+        planning_frame=str(group.get_planning_frame()),
+        end_effector_link=str(group.get_end_effector_link()),
+        position_m=[
+            float(current.pose.position.x),
+            float(current.pose.position.y),
+            float(current.pose.position.z),
+        ],
+        quaternion_xyzw=quaternion_xyzw,
+        rpy_rad=quaternion_to_rpy_rad(*quaternion_xyzw),
     )
 
 
@@ -215,6 +260,7 @@ def clamp_pose_to_workspace(target_xyz: np.ndarray, workspace_bounds_m: Dict[str
 
 def action_to_target_pose(
     snapshot: LapStateSnapshot,
+    moveit_tcp_pose: MoveItCurrentTcpPose,
     response: dict,
     config: LapRuntimeConfig,
     max_actions: int = 1,
@@ -232,11 +278,13 @@ def action_to_target_pose(
         raise ValueError("LAP action must have at least xyz channels")
     axis_map = [int(v) for v in config.axis_map]
     delta_xyz = np.asarray([first[axis_map[0]], first[axis_map[1]], first[axis_map[2]]], dtype=float)
+    if not np.isfinite(delta_xyz).all():
+        raise ValueError("LAP translation channels must be finite")
     delta_xyz = clamp_translation(delta_xyz * config.translation_scale, config.max_translation_per_action_m)
-    current_xyz = np.asarray(snapshot.pose_position_m, dtype=float)
+    current_xyz = np.asarray(moveit_tcp_pose.position_m, dtype=float)
     unclamped_target = current_xyz + delta_xyz
     clamped_target = clamp_pose_to_workspace(unclamped_target, config.workspace_bounds_m)
-    quat = snapshot.pose_quaternion_xyzw
+    quat = moveit_tcp_pose.quaternion_xyzw
     target_pose = Pose(
         x=float(clamped_target[0]),
         y=float(clamped_target[1]),
@@ -245,23 +293,30 @@ def action_to_target_pose(
         qy=float(quat[1]),
         qz=float(quat[2]),
         qw=float(quat[3]),
-        frame_id="base_link",
+        frame_id=moveit_tcp_pose.planning_frame,
     )
     return {
         "raw_actions": raw_actions.tolist(),
         "selected_action": first.tolist(),
-        "translation_delta_m": delta_xyz.tolist(),
-        "current_pose": {
-            "position": snapshot.pose_position_m,
-            "quaternion_xyzw": snapshot.pose_quaternion_xyzw,
-            "rpy_rad": snapshot.pose_rpy_rad,
+        "lap_translation_delta": delta_xyz.tolist(),
+        "telemetry_end_pose": {
+            "position": snapshot.telemetry_end_pose_position_m,
+            "quaternion_xyzw": snapshot.telemetry_end_pose_quaternion_xyzw,
+            "rpy_rad": snapshot.telemetry_end_pose_rpy_rad,
         },
-        "unclamped_target_pose": {
-            "position": unclamped_target.tolist(),
+        "moveit_current_tcp_pose": {
+            "position": moveit_tcp_pose.position_m,
+            "quaternion_xyzw": moveit_tcp_pose.quaternion_xyzw,
+            "rpy_rad": moveit_tcp_pose.rpy_rad,
+        },
+        "moveit_planning_frame": moveit_tcp_pose.planning_frame,
+        "moveit_end_effector_link": moveit_tcp_pose.end_effector_link,
+        "proposed_tcp_target": {
+            "position": clamped_target.tolist(),
             "quaternion_xyzw": quat,
         },
-        "target_pose": {
-            "position": clamped_target.tolist(),
+        "unclamped_tcp_target": {
+            "position": unclamped_target.tolist(),
             "quaternion_xyzw": quat,
         },
         "pose": target_pose,

@@ -20,6 +20,7 @@ from piper_on_bunker.policies.lap_policy import (
     build_lap_request,
     capture_live_snapshot,
     default_log_path,
+    get_moveit_current_tcp_pose,
     load_lap_config,
     preview_or_execute,
     write_result,
@@ -51,9 +52,10 @@ def main() -> int:
 
     config = load_lap_config(resolve_config_path(args.config))
     snapshot = capture_live_snapshot(config, timeout_s=args.timeout)
+    moveit_tcp_pose = get_moveit_current_tcp_pose()
     request = build_lap_request(snapshot, args.instruction)
     remote = LapWebsocketClient(config.host, config.port, timeout_s=args.timeout).infer(request)
-    converted = action_to_target_pose(snapshot, remote["response"], config, max_actions=args.max_actions)
+    converted = action_to_target_pose(snapshot, moveit_tcp_pose, remote["response"], config, max_actions=args.max_actions)
     execution = preview_or_execute(
         converted["pose"],
         execute=args.execute,

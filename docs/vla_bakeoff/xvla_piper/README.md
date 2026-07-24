@@ -88,26 +88,29 @@ Full official LeRobot export and X-VLA training remain blocked on real demonstra
 Read-only environment check:
 
 ```bash
-docker exec -it abot-piper-noetic bash -lc '
-cd /root/piper-pipeline-testbed
-source /opt/ros/noetic/setup.bash
-python3 piper-on-bunker/scripts/inspect_piper_demo_environment.py \
-  --config piper-on-bunker/config/piper_laptop_hardware.yaml
-'
+./tools/run_in_noetic_container.sh \
+  python3 piper-on-bunker/scripts/inspect_piper_demo_environment.py \
+    --config piper-on-bunker/config/piper_laptop_hardware.yaml
 ```
 
 Manual recording session:
 
 ```bash
-docker exec -it abot-piper-noetic bash -lc '
-cd /root/piper-pipeline-testbed
-source /opt/ros/noetic/setup.bash
-python3 piper-on-bunker/scripts/record_piper_demo.py \
-  --config piper-on-bunker/config/piper_laptop_hardware.yaml \
-  --dataset-root piper-on-bunker/data/local/piper_xvla_target_v0 \
-  --task "Move the gripper toward the marked target."
-'
+./tools/run_in_noetic_container.sh \
+  python3 piper-on-bunker/scripts/record_piper_demo.py \
+    --config piper-on-bunker/config/piper_laptop_hardware.yaml \
+    --dataset-root piper-on-bunker/data/local/piper_xvla_target_v0 \
+    --task "Move the gripper toward the marked target."
 ```
+
+Why this wrapper exists:
+
+- the running `abot-piper-noetic` container currently mounts `~/ABot-Claw` only
+- `docker exec` into that container would write the demo dataset into an ephemeral
+  container filesystem copy of `~/piper-pipeline-testbed`
+- the wrapper launches a short-lived ROS-enabled sidecar from the same image with
+  the testbed bind-mounted, so `piper-on-bunker/data/local/piper_xvla_target_v0`
+  persists directly on the host
 
 Inside the recorder:
 

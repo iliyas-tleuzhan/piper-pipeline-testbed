@@ -30,7 +30,8 @@ def _config() -> LapRuntimeConfig:
         end_pose_topic="/pose",
         axis_map=[0, 1, 2],
         translation_scale=1.0,
-        max_translation_per_action_m=0.02,
+        max_total_translation_m=0.20,
+        max_adjacent_waypoint_translation_m=0.03,
         preserve_orientation=True,
         motion_profiles={
             "safe": MotionProfile("safe", 0.20, 0.15),
@@ -42,7 +43,7 @@ def _config() -> LapRuntimeConfig:
         cartesian_eef_step_m=0.005,
         cartesian_jump_threshold=0.0,
         min_cartesian_path_fraction=0.95,
-        max_total_tcp_displacement_m=0.12,
+        max_total_tcp_displacement_m=0.20,
         max_total_joint_delta_rad=0.75,
         max_adjacent_joint_delta_rad=0.30,
         position_tolerance_m=0.01,
@@ -119,7 +120,7 @@ def test_action_to_target_pose_clamps_workspace():
             max_actions=1,
         )
     except ValueError as exc:
-        assert "exceeding max_translation_per_action_m" in str(exc)
+        assert "max_total_translation_m" in str(exc)
     else:
         raise AssertionError("expected translation bound rejection")
 
@@ -187,6 +188,84 @@ def test_nonfinite_lap_actions_are_rejected():
         assert "finite" in str(exc)
     else:
         raise AssertionError("expected ValueError for non-finite LAP translation")
+
+
+def test_horizon_accepts_large_total_motion_with_small_adjacent_spacing():
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {
+                "actions": [
+                    [0.02, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.04, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.07, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.10, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.13, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                ]
+            },
+            _config(),
+            max_actions=16,
+        )
+    assert plan.selected_horizon_length == 5
+    assert plan.horizon_truncated is False
+    assert np.isclose(plan.total_requested_tcp_displacement_m, 0.13)
+    assert np.isclose(plan.maximum_adjacent_waypoint_translation_m, 0.03)
+
+
+def test_horizon_rejects_adjacent_waypoint_jump():
+    try:
+        horizon_to_trajectory_plan(
+            _snapshot(),
+            _moveit_pose(),
+            {"actions": [[0.01, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], [0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]]},
+            _config(),
+            max_actions=16,
+        )
+    except ValueError as exc:
+        assert "adjacent displacement" in str(exc)
+        assert "1" in str(exc)
+    else:
+        raise AssertionError("expected adjacent waypoint rejection")
+
+
+def test_horizon_truncates_to_safe_prefix_on_total_limit():
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {
+                "actions": [
+                    [0.02, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.04, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.07, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.10, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.13, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.16, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.22, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                ]
+            },
+            _config(),
+            max_actions=16,
+        )
+    assert plan.selected_horizon_length == 6
+    assert plan.horizon_truncated is True
+    assert plan.rejected_waypoint_index == 6
+    assert plan.rejected_waypoint_reason == "max_total_translation_m"
+    assert np.isclose(plan.total_requested_tcp_displacement_m, 0.22)
+
+
+def test_horizon_rejects_when_total_limit_kills_useful_prefix():
+    try:
+        horizon_to_trajectory_plan(
+            _snapshot(),
+            _moveit_pose(),
+            {"actions": [[0.01, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0], [0.21, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0]]},
+            _config(),
+            max_actions=16,
+        )
+    except ValueError as exc:
+        assert "useful safe prefix" in str(exc)
+    else:
+        raise AssertionError("expected safe-prefix rejection")
 
 
 class _FakeDuration:
@@ -367,6 +446,8 @@ topics:
   joint_state: /joint_states_single
   end_pose: /end_pose
 motion:
+  max_total_translation_m: 0.20
+  max_adjacent_waypoint_translation_m: 0.03
   profiles:
     fast:
       velocity_scaling: 1.5
@@ -433,3 +514,30 @@ def test_preview_or_execute_falls_back_to_one_final_plan(monkeypatch):
     assert result["outputs"]["planning_mode"] == "final_pose_fallback"
     assert result["outputs"]["selected_horizon_length"] == 2
     assert executed["planned_with_pose_target"] is True
+
+
+def test_preview_or_execute_reports_truncated_safe_prefix(monkeypatch):
+    executed = _install_fake_moveit(monkeypatch)
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {
+                "actions": [
+                    [0.02, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.04, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.07, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.10, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.13, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.16, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                    [0.22, 0.00, 0.00, 0.0, 0.0, 0.0, 0.0],
+                ]
+            },
+            _config(),
+            max_actions=16,
+        )
+    result = preview_or_execute(plan, execute=False, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is True
+    assert result["outputs"]["horizon_truncated"] is True
+    assert result["outputs"]["rejected_waypoint_index"] == 6
+    assert result["outputs"]["selected_horizon_length"] == 6
+    assert executed["waypoint_count"] == 6

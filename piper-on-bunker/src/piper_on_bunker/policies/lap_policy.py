@@ -37,7 +37,8 @@ class LapRuntimeConfig:
     end_pose_topic: str
     axis_map: List[int]
     translation_scale: float
-    max_translation_per_action_m: float
+    max_total_translation_m: float
+    max_adjacent_waypoint_translation_m: float
     preserve_orientation: bool
     motion_profiles: Dict[str, MotionProfile]
     default_motion_profile: str
@@ -87,6 +88,12 @@ class LapTrajectoryPlan:
     moveit_planning_frame: str
     moveit_end_effector_link: str
     total_requested_tcp_displacement_m: float
+    maximum_adjacent_waypoint_translation_m: float
+    configured_total_translation_limit_m: float
+    configured_adjacent_waypoint_limit_m: float
+    rejected_waypoint_index: Optional[int]
+    horizon_truncated: bool
+    rejected_waypoint_reason: Optional[str]
 
 
 def load_lap_config(path: str | Path) -> LapRuntimeConfig:
@@ -115,7 +122,13 @@ def load_lap_config(path: str | Path) -> LapRuntimeConfig:
         end_pose_topic=str(topics.get("end_pose", "/end_pose")),
         axis_map=[int(v) for v in motion.get("axis_map", [0, 1, 2])],
         translation_scale=float(motion.get("translation_scale", 1.0)),
-        max_translation_per_action_m=float(motion.get("max_translation_per_action_m", 0.02)),
+        max_total_translation_m=float(
+            motion.get(
+                "max_total_translation_m",
+                motion.get("max_translation_per_action_m", 0.20),
+            )
+        ),
+        max_adjacent_waypoint_translation_m=float(motion.get("max_adjacent_waypoint_translation_m", 0.03)),
         preserve_orientation=bool(motion.get("preserve_orientation", True)),
         motion_profiles=configured_profiles,
         default_motion_profile=str(motion.get("default_motion_profile", "fast")),
@@ -123,7 +136,12 @@ def load_lap_config(path: str | Path) -> LapRuntimeConfig:
         cartesian_eef_step_m=float(motion.get("cartesian_eef_step_m", 0.005)),
         cartesian_jump_threshold=float(motion.get("cartesian_jump_threshold", 0.0)),
         min_cartesian_path_fraction=float(motion.get("min_cartesian_path_fraction", 0.95)),
-        max_total_tcp_displacement_m=float(motion.get("max_total_tcp_displacement_m", 0.12)),
+        max_total_tcp_displacement_m=float(
+            motion.get(
+                "max_total_tcp_displacement_m",
+                motion.get("max_total_translation_m", 0.20),
+            )
+        ),
         max_total_joint_delta_rad=float(motion.get("max_total_joint_delta_rad", 0.75)),
         max_adjacent_joint_delta_rad=float(motion.get("max_adjacent_joint_delta_rad", 0.30)),
         position_tolerance_m=float(motion.get("position_tolerance_m", 0.01)),
@@ -336,13 +354,7 @@ def _translation_from_action_row(row: np.ndarray, config: LapRuntimeConfig) -> n
     delta_xyz = np.asarray([row[axis_map[0]], row[axis_map[1]], row[axis_map[2]]], dtype=float)
     if not np.isfinite(delta_xyz).all():
         raise ValueError("LAP translation channels must be finite")
-    delta_xyz = delta_xyz * float(config.translation_scale)
-    step_norm = float(np.linalg.norm(delta_xyz))
-    if step_norm > float(config.max_translation_per_action_m):
-        raise ValueError(
-            f"LAP action row requests {step_norm:.6f} m, exceeding max_translation_per_action_m={config.max_translation_per_action_m:.6f}"
-        )
-    return delta_xyz
+    return delta_xyz * float(config.translation_scale)
 
 
 def _validate_workspace_point(target_xyz: np.ndarray, workspace_bounds_m: Dict[str, List[float]]) -> None:
@@ -367,16 +379,42 @@ def horizon_to_trajectory_plan(
     current_xyz = np.asarray(moveit_tcp_pose.position_m, dtype=float)
     absolute_targets: List[Pose] = []
     total_requested_tcp_displacement_m = 0.0
+    accepted_total_tcp_displacement_m = 0.0
+    maximum_adjacent_waypoint_translation_m = 0.0
+    rejected_waypoint_index: Optional[int] = None
+    rejected_waypoint_reason: Optional[str] = None
+    horizon_truncated = False
+    previous_delta_xyz = np.zeros(3, dtype=float)
+    total_limit = float(config.max_total_translation_m)
+    adjacent_limit = float(config.max_adjacent_waypoint_translation_m)
+    min_useful_waypoints = 1 if raw_actions.shape[0] <= 1 else 2
+    tolerance = 1e-9
 
     # Official LAP real-robot postprocessing adds the current state to every row
     # of the returned chunk independently. That means each row is a future delta
     # from the current state, not an increment to the previous row.
-    for row in raw_actions:
+    for index, row in enumerate(raw_actions):
         delta_xyz = _translation_from_action_row(row, config)
+        displacement = float(np.linalg.norm(delta_xyz))
+        adjacent_displacement = float(np.linalg.norm(delta_xyz - previous_delta_xyz))
+        total_requested_tcp_displacement_m = max(total_requested_tcp_displacement_m, displacement)
+        maximum_adjacent_waypoint_translation_m = max(
+            maximum_adjacent_waypoint_translation_m,
+            adjacent_displacement,
+        )
+        if displacement - total_limit > tolerance:
+            rejected_waypoint_index = index
+            rejected_waypoint_reason = "max_total_translation_m"
+            break
+        if adjacent_displacement - adjacent_limit > tolerance:
+            raise ValueError(
+                "LAP waypoint "
+                f"{index} adjacent displacement {adjacent_displacement:.6f} m exceeds "
+                f"max_adjacent_waypoint_translation_m={adjacent_limit:.6f}"
+            )
         target_xyz = current_xyz + delta_xyz
         _validate_workspace_point(target_xyz, config.workspace_bounds_m)
-        displacement = float(np.linalg.norm(target_xyz - current_xyz))
-        total_requested_tcp_displacement_m = max(total_requested_tcp_displacement_m, displacement)
+        accepted_total_tcp_displacement_m = max(accepted_total_tcp_displacement_m, displacement)
         absolute_targets.append(
             Pose(
                 x=float(target_xyz[0]),
@@ -389,11 +427,22 @@ def horizon_to_trajectory_plan(
                 frame_id=moveit_tcp_pose.planning_frame,
             )
         )
+        previous_delta_xyz = delta_xyz
 
-    if total_requested_tcp_displacement_m > float(config.max_total_tcp_displacement_m):
+    if rejected_waypoint_index is not None:
+        if len(absolute_targets) < min_useful_waypoints:
+            raise ValueError(
+                "LAP horizon exceeded max_total_translation_m before a useful safe prefix was available: "
+                f"rejected_waypoint_index={rejected_waypoint_index} "
+                f"maximum_total_tcp_displacement_m={total_requested_tcp_displacement_m:.6f} "
+                f"configured_total_limit_m={total_limit:.6f}"
+            )
+        horizon_truncated = True
+
+    if accepted_total_tcp_displacement_m > float(config.max_total_tcp_displacement_m):
         raise ValueError(
-            "combined LAP horizon requests "
-            f"{total_requested_tcp_displacement_m:.6f} m, exceeding max_total_tcp_displacement_m={config.max_total_tcp_displacement_m:.6f}"
+            "accepted LAP horizon requests "
+            f"{accepted_total_tcp_displacement_m:.6f} m, exceeding max_total_tcp_displacement_m={config.max_total_tcp_displacement_m:.6f}"
         )
 
     return LapTrajectoryPlan(
@@ -415,6 +464,12 @@ def horizon_to_trajectory_plan(
         moveit_planning_frame=moveit_tcp_pose.planning_frame,
         moveit_end_effector_link=moveit_tcp_pose.end_effector_link,
         total_requested_tcp_displacement_m=total_requested_tcp_displacement_m,
+        maximum_adjacent_waypoint_translation_m=maximum_adjacent_waypoint_translation_m,
+        configured_total_translation_limit_m=total_limit,
+        configured_adjacent_waypoint_limit_m=adjacent_limit,
+        rejected_waypoint_index=rejected_waypoint_index,
+        horizon_truncated=horizon_truncated,
+        rejected_waypoint_reason=rejected_waypoint_reason,
     )
 
 
@@ -441,6 +496,15 @@ def action_to_target_pose(
         "proposed_tcp_target": {
             "position": [first_target.x, first_target.y, first_target.z],
             "quaternion_xyzw": [first_target.qx, first_target.qy, first_target.qz, first_target.qw],
+        },
+        "horizon_diagnostics": {
+            "maximum_total_tcp_displacement_m": plan.total_requested_tcp_displacement_m,
+            "maximum_adjacent_waypoint_translation_m": plan.maximum_adjacent_waypoint_translation_m,
+            "configured_total_translation_limit_m": plan.configured_total_translation_limit_m,
+            "configured_adjacent_waypoint_limit_m": plan.configured_adjacent_waypoint_limit_m,
+            "rejected_waypoint_index": plan.rejected_waypoint_index,
+            "rejected_waypoint_reason": plan.rejected_waypoint_reason,
+            "horizon_truncated": plan.horizon_truncated,
         },
         "unclamped_tcp_target": {
             "position": [first_target.x, first_target.y, first_target.z],
@@ -610,7 +674,13 @@ def preview_or_execute(
         "lap_horizon_length": int(trajectory_plan.lap_horizon_length),
         "selected_horizon_length": int(trajectory_plan.selected_horizon_length),
         "confirmed_action_semantics": trajectory_plan.action_semantics,
-        "total_requested_tcp_displacement_m": float(trajectory_plan.total_requested_tcp_displacement_m),
+        "maximum_total_tcp_displacement_m": float(trajectory_plan.total_requested_tcp_displacement_m),
+        "maximum_adjacent_waypoint_translation_m": float(trajectory_plan.maximum_adjacent_waypoint_translation_m),
+        "configured_total_translation_limit_m": float(trajectory_plan.configured_total_translation_limit_m),
+        "configured_adjacent_waypoint_limit_m": float(trajectory_plan.configured_adjacent_waypoint_limit_m),
+        "rejected_waypoint_index": trajectory_plan.rejected_waypoint_index,
+        "rejected_waypoint_reason": trajectory_plan.rejected_waypoint_reason,
+        "horizon_truncated": bool(trajectory_plan.horizon_truncated),
         "cartesian_path_fraction": float(cartesian_fraction),
         "velocity_scaling": float(motion_profile.velocity_scaling),
         "acceleration_scaling": float(motion_profile.acceleration_scaling),

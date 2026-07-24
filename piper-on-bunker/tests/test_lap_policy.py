@@ -377,6 +377,7 @@ def _install_fake_moveit(monkeypatch, *, cartesian_fraction=1.0):
 
         def execute(self, trajectory, wait=True):
             executed["executed"] = True
+            return True
 
         def stop(self):
             executed["stopped"] = True
@@ -733,3 +734,78 @@ def test_preview_or_execute_uses_safe_fallback_prefix_when_full_prefix_is_unsafe
     assert result["outputs"]["planning_prefix_truncated"] is True
     assert result["outputs"]["candidate_evaluations"][0]["safe"] is False
     assert result["outputs"]["candidate_evaluations"][-1]["safe"] is True
+
+
+def test_preview_or_execute_execute_requires_enable_preflight(monkeypatch):
+    import piper_on_bunker.policies.lap_policy as lap_policy
+
+    _install_fake_moveit(monkeypatch, cartesian_fraction=1.0)
+    _install_fake_moveit_msgs(monkeypatch)
+    monkeypatch.setattr(lap_policy, "_enable_piper_driver", lambda rospy: {"attempted": True, "success": False, "error": "enable failed"})
+
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {"actions": [[0.002, 0.001, 0.001, 0.0, 0.0, 0.0, 0.0]]},
+        _config(),
+        max_actions=1,
+    )
+    result = preview_or_execute(plan, execute=True, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is False
+    assert result["status_code"] == "ENABLE_FAILURE"
+    assert result["outputs"]["enable_preflight"]["success"] is False
+
+
+def test_preview_or_execute_execute_fails_when_moveit_execute_fails(monkeypatch):
+    import piper_on_bunker.policies.lap_policy as lap_policy
+
+    class ExecuteFailGroup:
+        def __init__(self, name):
+            self.name = name
+            self.pose_target = None
+
+        def set_start_state_to_current_state(self): pass
+        def set_planning_time(self, value): pass
+        def set_num_planning_attempts(self, value): pass
+        def set_pose_reference_frame(self, value): pass
+        def set_end_effector_link(self, value): pass
+        def set_max_velocity_scaling_factor(self, value): pass
+        def set_max_acceleration_scaling_factor(self, value): pass
+        def get_current_state(self): return object()
+        def get_active_joints(self): return ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+        def get_current_joint_values(self): return [0.0] * 6
+        def set_path_constraints(self, constraints): pass
+        def clear_path_constraints(self): pass
+        def compute_cartesian_path(self, waypoints, eef_step, jump_threshold):
+            return _FakeTrajectory([_FakeTrajectoryPoint([0.0] * 6, 0.0), _FakeTrajectoryPoint([0.1] * 6, 0.5)]), 1.0
+        def retime_trajectory(self, state, trajectory, velocity_scaling_factor, acceleration_scaling_factor): return trajectory
+        def set_pose_target(self, pose, link): self.pose_target = (pose, link)
+        def plan(self):
+            return True, _FakeTrajectory([_FakeTrajectoryPoint([0.0] * 6, 0.0), _FakeTrajectoryPoint([0.1] * 6, 0.8)]), 0.2, type("Err", (), {"val": 1})()
+        def execute(self, trajectory, wait=True): return False
+        def stop(self): pass
+        def clear_pose_targets(self): pass
+        def get_current_pose(self, link):
+            pose = type("PoseStamped", (), {})()
+            pose.pose = type("Pose", (), {})()
+            pose.pose.position = type("Point", (), {"x": 0.19124318537468837, "y": 0.0022620599968891843, "z": 0.22627771846438982})()
+            pose.pose.orientation = type("Quat", (), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0})()
+            return pose
+
+    monkeypatch.setitem(__import__("sys").modules, "moveit_commander", type("MoveIt", (), {"roscpp_initialize": staticmethod(lambda argv: None), "MoveGroupCommander": ExecuteFailGroup})())
+    monkeypatch.setitem(__import__("sys").modules, "rospy", type("Rospy", (), {"get_node_uri": staticmethod(lambda: "node"), "init_node": staticmethod(lambda *a, **k: None)})())
+    _install_fake_geometry(monkeypatch)
+    _install_fake_moveit_msgs(monkeypatch)
+    monkeypatch.setattr(lap_policy, "_enable_piper_driver", lambda rospy: {"attempted": True, "success": True})
+
+    plan = horizon_to_trajectory_plan(
+        _snapshot(),
+        _moveit_pose(),
+        {"actions": [[0.002, 0.001, 0.001, 0.0, 0.0, 0.0, 0.0]]},
+        _config(),
+        max_actions=1,
+    )
+    result = preview_or_execute(plan, execute=True, motion_profile=get_motion_profile(_config(), "fast"), config=_config())
+    assert result["success"] is False
+    assert result["status_code"] == "EXECUTION_FAILURE"
+    assert result["outputs"]["moveit_execute_result"]["returned_success"] is False

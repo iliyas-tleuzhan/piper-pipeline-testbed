@@ -748,6 +748,32 @@ def _verify_current_tcp_pose(group, target: Pose, tolerance_m: float) -> dict:
     }
 
 
+def _enable_piper_driver(rospy) -> dict:
+    try:
+        from piper_msgs.srv import Enable
+    except Exception as exc:
+        return {
+            "attempted": False,
+            "success": False,
+            "error": f"missing piper enable service type: {exc!r}",
+        }
+
+    try:
+        rospy.wait_for_service("/enable_srv", timeout=5.0)
+        proxy = rospy.ServiceProxy("/enable_srv", Enable)
+        response = proxy(enable_request=True)
+        return {
+            "attempted": True,
+            "success": bool(getattr(response, "enable_response", False)),
+        }
+    except Exception as exc:
+        return {
+            "attempted": True,
+            "success": False,
+            "error": repr(exc),
+        }
+
+
 def preview_or_execute(
     trajectory_plan: LapTrajectoryPlan,
     *,
@@ -992,9 +1018,27 @@ def preview_or_execute(
             "outputs": outputs,
         }
 
-    group.execute(trajectory, wait=True)
+    enable_result = _enable_piper_driver(rospy)
+    outputs["enable_preflight"] = enable_result
+    if not enable_result.get("success"):
+        return {
+            "success": False,
+            "status_code": "ENABLE_FAILURE",
+            "message": "failed to enable the PiPER driver before LAP execution",
+            "outputs": outputs,
+        }
+
+    execute_result = bool(group.execute(trajectory, wait=True))
     group.stop()
     group.clear_pose_targets()
+    outputs["moveit_execute_result"] = {"returned_success": execute_result}
+    if not execute_result:
+        return {
+            "success": False,
+            "status_code": "EXECUTION_FAILURE",
+            "message": "MoveIt rejected or timed out during LAP trajectory execution",
+            "outputs": outputs,
+        }
     verification = _verify_current_tcp_pose(
         group,
         selected_targets[-1],

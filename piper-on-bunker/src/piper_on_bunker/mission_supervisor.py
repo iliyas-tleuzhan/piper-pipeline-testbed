@@ -8,7 +8,6 @@ from piper_on_bunker.arm_state_machine import ArmStateMachine
 from piper_on_bunker.hardware.mock_base import MockBase
 from piper_on_bunker.mission_logging import MissionLogger
 from piper_on_bunker.models import ArmMode, Observation, SkillResult, StatusCode, Target
-from piper_on_bunker.policies.moveit_policy import MoveItPolicy
 from piper_on_bunker.resource_manager import ResourceManager
 from piper_on_bunker.safety import validate_named_pose, validate_workspace
 from piper_on_bunker.transforms import TransformResolver, require_base_pose
@@ -28,7 +27,7 @@ class MissionSupervisor:
         self.mode = mode
         self.physical_motion_enabled = physical_motion_enabled
         self.state = ArmStateMachine()
-        self.policy = MoveItPolicy()
+        self.policy = None
         self.last_observation = None
         self.last_target = None
         self.verification_should_pass = True
@@ -134,7 +133,7 @@ class MissionSupervisor:
         if not self.last_target:
             return self._fail(StatusCode.TARGET_NOT_FOUND, "no target")
         self.state.transition(ArmMode.PRE_MANIPULATION)
-        pose = self.policy.pre_contact_pose(require_base_pose(self.last_target.base_pose))
+        pose = self._legacy_moveit_policy().pre_contact_pose(require_base_pose(self.last_target.base_pose))
         try:
             self._validate_motion_prerequisites(target_dependent=True)
             self._validate_distance(require_base_pose(self.last_target.base_pose), pose, "max_pre_contact_distance_m")
@@ -316,3 +315,10 @@ class MissionSupervisor:
         if isinstance(value, (str, int, float, bool)) or value is None:
             return value
         return repr(value)
+
+    def _legacy_moveit_policy(self):
+        if self.policy is None:
+            from piper_on_bunker.policies.moveit_policy import MoveItPolicy
+
+            self.policy = MoveItPolicy()
+        return self.policy

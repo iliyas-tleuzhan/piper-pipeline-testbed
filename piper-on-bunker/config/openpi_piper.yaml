@@ -1,0 +1,57 @@
+schema_version: openpi_piper_runtime.v1
+default_runtime: openclaw_pi05_direct_joint
+openpi:
+  upstream_repo: https://github.com/Physical-Intelligence/openpi.git
+  pinned_commit: 15a9616a00943ada6c20a0f158e3adb39df2ccac
+  base_checkpoint: gs://openpi-assets/checkpoints/pi05_base
+  base_checkpoint_revision: pinned-by-openpi-assets-at-openpi-commit
+  selected_training_config: pi05_piper_single_arm
+  public_checkpoint_piper_compatible: false
+  remote_host: 192.168.1.104
+  remote_port: 8017
+  official_client: openpi-client websocket_client_policy.WebsocketClientPolicy
+observation_schema:
+  exterior_image: observation/exterior_image
+  wrist_image: observation/wrist_image
+  state: observation/state
+  prompt: prompt
+action_schema:
+  semantics: absolute_piper_joint_targets
+  joint_names: [joint1, joint2, joint3, joint4, joint5, joint6, gripper]
+  action_dim: 7
+  action_horizon: 10
+  arm_units: rad
+  gripper_units: total_jaw_opening_m
+  control_frequency_hz: 20.0
+hardware:
+  command_topic: /piper_joint_commands
+  feedback_topic: /joint_states_single
+  enable_service: /enable_srv
+  gripper_service: /gripper_srv
+  can_interface: can0
+  hardware_publish_frequency_hz: 50.0
+safety:
+  shadow_mode_default: true
+  physical_motion_permission: false
+  command_authority_lock: /tmp/piper_openpi_command_authority.lock
+  max_state_age_s: 0.5
+  max_camera_age_s: 0.5
+  max_policy_response_age_s: 1.0
+  max_initial_jump_rad: 0.25
+  max_adjacent_joint_delta_rad: 0.20
+  max_joint_velocity_rad_s: 1.0
+  max_joint_acceleration_rad_s2: 4.0
+  max_joint_jerk_rad_s3: 30.0
+  gripper_physical_enabled: false
+  joint_min_rad: [-2.618, 0.0, -2.967, -1.745, -1.22, -2.094]
+  joint_max_rad: [2.618, 3.14, 0.0, 1.745, 1.22, 2.094]
+  gripper_min_m: 0.0
+  gripper_max_m: 0.06
+dataset:
+  lerobot_repo_id: iliyas-tleuzhan/piper_openpi_single_arm
+  robot_type: piper_single_arm
+  fps: 20
+  normalization_asset_id: piper_single_arm_v1
+  action_source: commanded_joint_targets
+  max_timestamp_skew_s: 0.03
+

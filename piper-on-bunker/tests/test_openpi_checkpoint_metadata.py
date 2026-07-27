@@ -1,5 +1,6 @@
 import pytest
 
+from piper_on_bunker.policies.checkpoint_metadata import load_checkpoint_metadata
 from piper_on_bunker.policies.checkpoint_metadata import validate_checkpoint_metadata
 from piper_on_bunker.policies.openpi_piper_policy import OPENPI_COMMIT
 from piper_on_bunker.policies.openpi_piper_policy import PIPER_ACTION_SEMANTICS
@@ -52,3 +53,8 @@ def test_gripper_gate_can_be_relaxed_only_for_arm_only_validation():
 def test_require_raises_with_failures():
     with pytest.raises(ValueError, match="not eligible"):
         validate_checkpoint_metadata({}).require()
+
+
+def test_missing_metadata_path_has_clear_error(tmp_path):
+    with pytest.raises(ValueError, match="does not exist"):
+        load_checkpoint_metadata(tmp_path / "missing.json")

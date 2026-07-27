@@ -28,6 +28,8 @@ def load_checkpoint_metadata(path: str | Path) -> dict[str, Any]:
     metadata_path = Path(path)
     if metadata_path.is_dir():
         metadata_path = metadata_path / "piper_checkpoint_metadata.json"
+    if not metadata_path.exists():
+        raise ValueError(f"PiPER checkpoint metadata file does not exist: {metadata_path}")
     return json.loads(metadata_path.read_text(encoding="utf-8"))
 
 

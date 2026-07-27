@@ -62,9 +62,12 @@ def main() -> int:
     if not args.execute:
         raise SystemExit("This is the physical runner. Use --execute, or use run_openpi_piper_live_shadow.py.")
 
-    metadata = load_checkpoint_metadata(args.checkpoint_metadata)
-    eligibility = validate_checkpoint_metadata(metadata, require_gripper=True)
-    eligibility.require()
+    try:
+        metadata = load_checkpoint_metadata(args.checkpoint_metadata)
+        eligibility = validate_checkpoint_metadata(metadata, require_gripper=True)
+        eligibility.require()
+    except ValueError as exc:
+        raise SystemExit(f"Physical OpenPI PiPER execution refused: {exc}") from exc
 
     orchestrator = PhaseOrchestrator(policy_client=OpenPIPiperClient(args.host, args.port), frequency_hz=args.policy_frequency_hz)
     plan = orchestrator.plan_task(args.instruction)

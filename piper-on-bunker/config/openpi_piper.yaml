@@ -42,9 +42,10 @@ safety:
   max_joint_velocity_rad_s: 1.0
   max_joint_acceleration_rad_s2: 4.0
   max_joint_jerk_rad_s3: 30.0
+  joint_limit_tolerance_rad: 0.012
   gripper_physical_enabled: false
   joint_min_rad: [-2.618, 0.0, -2.967, -1.745, -1.22, -2.094]
-  joint_max_rad: [2.618, 3.14, 0.0, 1.745, 1.22, 2.094]
+  joint_max_rad: [2.618, 3.14, 0.0, 1.745, 0.95, 2.0944]
   gripper_min_m: 0.0
   gripper_max_m: 0.06
 dataset:
@@ -54,4 +55,3 @@ dataset:
   normalization_asset_id: piper_single_arm_v1
   action_source: commanded_joint_targets
   max_timestamp_skew_s: 0.03
-

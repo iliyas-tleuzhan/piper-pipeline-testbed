@@ -8,7 +8,8 @@ import numpy as np
 @dataclass(frozen=True)
 class JointSafetyLimits:
     joint_min_rad: tuple[float, float, float, float, float, float] = (-2.618, 0.0, -2.967, -1.745, -1.22, -2.094)
-    joint_max_rad: tuple[float, float, float, float, float, float] = (2.618, 3.14, 0.0, 1.745, 1.22, 2.094)
+    joint_max_rad: tuple[float, float, float, float, float, float] = (2.618, 3.14, 0.0, 1.745, 0.95, 2.0944)
+    joint_limit_tolerance_rad: float = 0.012
     gripper_min_m: float = 0.0
     gripper_max_m: float = 0.06
     max_initial_jump_rad: float = 0.25
@@ -43,8 +44,19 @@ def validate_action_chunk(
     joint_max = np.asarray(limits.joint_max_rad, dtype=np.float64)
     arm = chunk[:, :6]
     gripper = chunk[:, 6]
-    if np.any(arm < joint_min) or np.any(arm > joint_max):
-        raise ValueError("action chunk violates authoritative PiPER joint limits")
+    lower_violations = arm < (joint_min - limits.joint_limit_tolerance_rad)
+    upper_violations = arm > (joint_max + limits.joint_limit_tolerance_rad)
+    if np.any(lower_violations) or np.any(upper_violations):
+        violation_indices = np.argwhere(lower_violations | upper_violations)
+        sample_index, joint_index = [int(value) for value in violation_indices[0]]
+        value = float(arm[sample_index, joint_index])
+        lower = float(joint_min[joint_index])
+        upper = float(joint_max[joint_index])
+        raise ValueError(
+            "action chunk violates authoritative PiPER joint limits: "
+            f"sample={sample_index} joint{joint_index + 1}={value:.6f} outside "
+            f"[{lower:.6f}, {upper:.6f}] with tolerance {limits.joint_limit_tolerance_rad:.6f}"
+        )
     if np.any(gripper < limits.gripper_min_m) or np.any(gripper > limits.gripper_max_m):
         raise ValueError("action chunk violates authoritative PiPER gripper limits")
 
@@ -114,4 +126,3 @@ def blend_chunks(previous_tail, next_head, *, blend_samples: int) -> np.ndarray:
     weights = np.linspace(0.0, 1.0, samples + 2, dtype=np.float64)[1:-1]
     blended[:samples] = (1.0 - weights[:, None]) * prev[-samples:] + weights[:, None] * nxt[:samples]
     return blended
-

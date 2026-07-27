@@ -60,7 +60,16 @@ class PhaseOrchestrator:
         validate_phase_sequence(plan.phases)
         return plan
 
-    def run_phase_shadow(self, phase: Phase, *, exterior_image=None, wrist_image=None, state=None) -> dict:
+    def run_phase_shadow(
+        self,
+        phase: Phase,
+        *,
+        exterior_image=None,
+        wrist_image=None,
+        state=None,
+        state_age_s: float = 0.0,
+        camera_age_s: float = 0.0,
+    ) -> dict:
         exterior = exterior_image if exterior_image is not None else np.zeros((224, 224, 3), dtype=np.uint8)
         wrist = wrist_image if wrist_image is not None else np.zeros((224, 224, 3), dtype=np.uint8)
         current_state = np.asarray(state if state is not None else np.zeros(7), dtype=np.float64)
@@ -74,8 +83,8 @@ class PhaseOrchestrator:
         result = self.executor.execute_response(
             response,
             current_state=current_state,
-            state_age_s=0.0,
-            camera_age_s=0.0,
+            state_age_s=state_age_s,
+            camera_age_s=camera_age_s,
             execute=False,
         )
         return {
@@ -84,4 +93,3 @@ class PhaseOrchestrator:
             "piper_compatible": response.metadata.piper_compatible,
             "execution": result.__dict__,
         }
-

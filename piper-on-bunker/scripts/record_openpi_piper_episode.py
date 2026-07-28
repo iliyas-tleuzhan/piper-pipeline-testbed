@@ -83,6 +83,33 @@ def _save_frame_images(episode_dir: Path, frame_index: int, exterior, wrist):
     return exterior_path.relative_to(episode_dir).as_posix(), wrist_path.relative_to(episode_dir).as_posix()
 
 
+def _missing_buffers(buffers: LatestRosBuffers, *, no_wrist: bool) -> list[str]:
+    state_msg, exterior_msg, wrist_msg = buffers.snapshot()
+    missing = []
+    if state_msg is None:
+        missing.append("joint_state")
+    if exterior_msg is None:
+        missing.append("exterior_image")
+    if wrist_msg is None and not no_wrist:
+        missing.append("wrist_image")
+    return missing
+
+
+def _wait_for_observations(buffers: LatestRosBuffers, *, no_wrist: bool, timeout_s: float) -> None:
+    deadline = monotonic() + float(timeout_s)
+    while monotonic() < deadline:
+        missing = _missing_buffers(buffers, no_wrist=no_wrist)
+        if not missing:
+            return
+        sleep(0.05)
+    missing = _missing_buffers(buffers, no_wrist=no_wrist)
+    raise RuntimeError(
+        "timed out waiting for required recorder observations: "
+        + ", ".join(missing)
+        + ". Check camera/joint publishers before recording."
+    )
+
+
 def _record_sample(
     *,
     episode_dir: Path,
@@ -97,7 +124,7 @@ def _record_sample(
 ) -> bool:
     state_msg, exterior_msg, wrist_msg = buffers.snapshot()
     if state_msg is None or exterior_msg is None or (wrist_msg is None and not no_wrist):
-        return False
+        raise RuntimeError("record_sample called before required observations were ready")
 
     state, state_stamp_s, state_age_s = joint_state_to_state_vector(state_msg)
     exterior_stamp_s = _stamp_s(exterior_msg)
@@ -157,6 +184,7 @@ def main() -> int:
     parser.add_argument("--max-skew-s", type=float, default=0.08)
     parser.add_argument("--max-duration-s", type=float, default=0.0, help="0 means record until Ctrl-C.")
     parser.add_argument("--max-frames", type=int, default=0, help="0 means unlimited.")
+    parser.add_argument("--observation-timeout-s", type=float, default=10.0)
     parser.add_argument("--gripper-raw-closed", type=float)
     parser.add_argument("--gripper-raw-open", type=float)
     parser.add_argument("--operator-notes", default="")
@@ -181,6 +209,8 @@ def main() -> int:
     rospy.Subscriber(args.exterior_image_topic, Image, buffers.set_exterior, queue_size=1)
     if not args.no_wrist:
         rospy.Subscriber(args.wrist_image_topic, Image, buffers.set_wrist, queue_size=1)
+
+    _wait_for_observations(buffers, no_wrist=args.no_wrist, timeout_s=args.observation_timeout_s)
 
     metadata = {
         "schema_version": "piper_openpi_raw_episode.v1",
@@ -218,31 +248,38 @@ def main() -> int:
 
     frame_count = 0
     valid_count = 0
+    dropped_count = 0
     start = monotonic()
 
     if args.action_source == "ros":
         def on_command(msg):
-            nonlocal frame_count, valid_count
+            nonlocal frame_count, valid_count, dropped_count
             if stop["requested"]:
+                return
+            if _missing_buffers(buffers, no_wrist=args.no_wrist):
+                dropped_count += 1
                 return
             state_msg, _, _ = buffers.snapshot()
             current_gripper = 0.0
             if state_msg is not None:
                 current_gripper = joint_state_to_state_vector(state_msg)[0][6]
             command = ros_command_to_sample(msg, current_gripper_m=current_gripper)
-            valid = _record_sample(
-                episode_dir=episode_dir,
-                frame_index=frame_count,
-                command=command,
-                buffers=buffers,
-                instruction=args.instruction,
-                phase_id=args.phase_id,
-                phase_prompt=phase_prompt,
-                max_skew_s=args.max_skew_s,
-                no_wrist=args.no_wrist,
-            )
-            frame_count += 1
-            valid_count += int(valid)
+            try:
+                valid = _record_sample(
+                    episode_dir=episode_dir,
+                    frame_index=frame_count,
+                    command=command,
+                    buffers=buffers,
+                    instruction=args.instruction,
+                    phase_id=args.phase_id,
+                    phase_prompt=phase_prompt,
+                    max_skew_s=args.max_skew_s,
+                    no_wrist=args.no_wrist,
+                )
+                frame_count += 1
+                valid_count += int(valid)
+            except RuntimeError:
+                dropped_count += 1
 
         rospy.Subscriber(args.command_topic, JointState, on_command, queue_size=100)
         while not stop["requested"] and (args.max_duration_s <= 0 or monotonic() - start < args.max_duration_s):
@@ -276,19 +313,25 @@ def main() -> int:
                 )
                 if command is None:
                     continue
-                valid = _record_sample(
-                    episode_dir=episode_dir,
-                    frame_index=frame_count,
-                    command=command,
-                    buffers=buffers,
-                    instruction=args.instruction,
-                    phase_id=args.phase_id,
-                    phase_prompt=phase_prompt,
-                    max_skew_s=args.max_skew_s,
-                    no_wrist=args.no_wrist,
-                )
-                frame_count += 1
-                valid_count += int(valid)
+                if _missing_buffers(buffers, no_wrist=args.no_wrist):
+                    dropped_count += 1
+                    continue
+                try:
+                    valid = _record_sample(
+                        episode_dir=episode_dir,
+                        frame_index=frame_count,
+                        command=command,
+                        buffers=buffers,
+                        instruction=args.instruction,
+                        phase_id=args.phase_id,
+                        phase_prompt=phase_prompt,
+                        max_skew_s=args.max_skew_s,
+                        no_wrist=args.no_wrist,
+                    )
+                    frame_count += 1
+                    valid_count += int(valid)
+                except RuntimeError:
+                    dropped_count += 1
         finally:
             bus.shutdown()
 
@@ -298,6 +341,7 @@ def main() -> int:
         "frames_recorded": frame_count,
         "valid_frames": valid_count,
         "invalid_frames": frame_count - valid_count,
+        "dropped_command_samples": dropped_count,
         "completed_utc": datetime.now(timezone.utc).isoformat(),
     }
     (episode_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")

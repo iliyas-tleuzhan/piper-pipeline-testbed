@@ -58,3 +58,18 @@ def test_require_raises_with_failures():
 def test_missing_metadata_path_has_clear_error(tmp_path):
     with pytest.raises(ValueError, match="does not exist"):
         load_checkpoint_metadata(tmp_path / "missing.json")
+
+
+def test_recorded_demo_smoke_metadata_is_not_physical_checkpoint():
+    metadata = _metadata()
+    metadata["checkpoint"] = "dev://recorded-openpi-smoke/one-four-phase-demo"
+    metadata["piper_compatible"] = False
+    metadata["physical_execution_allowed"] = False
+    metadata["offline_validation"] = {"passed": False, "report_hash": "sha256:smoke"}
+    metadata["gripper_hardware_verification"] = {"passed": False, "report_hash": "sha256:smoke"}
+
+    eligibility = validate_checkpoint_metadata(metadata)
+
+    assert not eligibility.eligible
+    assert any("piper_compatible" in failure for failure in eligibility.failures)
+    assert any("offline_validation" in failure for failure in eligibility.failures)

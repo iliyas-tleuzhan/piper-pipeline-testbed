@@ -24,6 +24,27 @@ from piper_on_bunker.policies.openpi_piper_policy import make_observation
 from piper_on_bunker.policies.openpi_piper_policy import validate_openpi_response
 
 
+def _checkpoint_preflight_report(path: str | None) -> dict | None:
+    if not path:
+        return None
+    try:
+        metadata = load_checkpoint_metadata(path)
+        eligibility = validate_checkpoint_metadata(metadata, require_gripper=True)
+        return {
+            "metadata_path": path,
+            "checkpoint": metadata.get("checkpoint"),
+            "piper_compatible": bool(metadata.get("piper_compatible", False)),
+            "eligible_for_physical_execution": eligibility.eligible,
+            "failures": list(eligibility.failures),
+        }
+    except ValueError as exc:
+        return {
+            "metadata_path": path,
+            "eligible_for_physical_execution": False,
+            "failures": [str(exc)],
+        }
+
+
 def _make_joint_state_publisher(topic: str):
     try:
         import rospy
@@ -84,6 +105,7 @@ def main() -> int:
                     "plan": plan.to_dict(),
                     "phase": phase.to_dict(),
                     "live_observation": live.to_summary(),
+                    "checkpoint_metadata": _checkpoint_preflight_report(args.checkpoint_metadata),
                     "checkpoint_metadata_required_for_execute": True,
                     "execution_allowed": False,
                     "physical_motion_performed": False,

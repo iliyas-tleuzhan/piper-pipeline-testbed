@@ -80,11 +80,17 @@ def _make_publisher(topic: str):
     try:
         import rospy
         from sensor_msgs.msg import JointState
+        from piper_msgs.srv import Enable
     except Exception as exc:
-        raise RuntimeError("demo replay requires rospy and sensor_msgs") from exc
+        raise RuntimeError("demo replay requires rospy, sensor_msgs, and piper_msgs") from exc
     if not rospy.get_node_uri():
         rospy.init_node("openpi_piper_demo_replay", anonymous=True, disable_signals=True)
     publisher = rospy.Publisher(topic, JointState, queue_size=1)
+
+    def enable_arm():
+        rospy.wait_for_service("/enable_srv", timeout=5.0)
+        response = rospy.ServiceProxy("/enable_srv", Enable)(True)
+        return bool(response.enable_response)
 
     def publish(sample):
         msg = JointState()
@@ -93,7 +99,7 @@ def _make_publisher(topic: str):
         msg.position = [float(value) for value in sample[:6]]
         publisher.publish(msg)
 
-    return rospy, publish
+    return rospy, enable_arm, publish
 
 
 def main() -> int:
@@ -159,7 +165,10 @@ def main() -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0
 
-    rospy, publish = _make_publisher(args.command_topic)
+    rospy, enable_arm, publish = _make_publisher(args.command_topic)
+    enable_ok = enable_arm()
+    if not enable_ok:
+        raise SystemExit("/enable_srv did not return enable_response=True")
     rate = rospy.Rate(args.publish_frequency_hz)
     published = 0
     start = monotonic()
@@ -177,6 +186,7 @@ def main() -> int:
     report["published_commands"] = published
     report["physical_motion_performed"] = bool(published)
     report["actual_duration_s"] = monotonic() - start
+    report["enable_response"] = enable_ok
     report["reason"] = "recorded demo commands replayed through direct PiPER joint publisher"
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0

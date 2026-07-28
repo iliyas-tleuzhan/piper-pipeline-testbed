@@ -33,7 +33,7 @@ if [[ -z "${IMAGE}" ]]; then
 fi
 
 CMD_STRING="$(printf '%q ' "$@")"
-DOCKER_RUN_ARGS=(--rm -i)
+DOCKER_RUN_ARGS=(--rm -i --privileged)
 
 if [[ -t 0 && -t 1 ]]; then
   DOCKER_RUN_ARGS+=(-t)

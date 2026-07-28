@@ -30,6 +30,7 @@ def main() -> int:
         description="Run OpenClaw -> OpenPI PiPER semantic phases with live ROS observations in shadow mode."
     )
     parser.add_argument("--instruction", required=True)
+    parser.add_argument("--phase-id", help="Run only one semantic phase instead of the full manipulation plan.")
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--joint-topic", default="/joint_states_single")
     parser.add_argument("--exterior-image-topic", default="/table_camera/color/image_raw")
@@ -44,11 +45,17 @@ def main() -> int:
 
     orchestrator = PhaseOrchestrator()
     plan = orchestrator.plan_task(args.instruction)
+    phases = plan.phases
+    if args.phase_id:
+        phase = next((item for item in plan.phases if item.phase_id == args.phase_id), None)
+        if phase is None:
+            raise SystemExit(f"Unknown phase id {args.phase_id!r}; expected one of {[item.phase_id for item in plan.phases]}")
+        phases = [phase]
     phase_results = []
     observations = []
     wrist_topic = None if args.no_wrist else args.wrist_image_topic
 
-    for phase in plan.phases:
+    for phase in phases:
         observation = read_live_openpi_observation(
             timeout_s=args.timeout,
             joint_topic=args.joint_topic,

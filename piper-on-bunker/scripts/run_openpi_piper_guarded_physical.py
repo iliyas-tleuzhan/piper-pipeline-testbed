@@ -50,17 +50,53 @@ def main() -> int:
     )
     parser.add_argument("--instruction", required=True)
     parser.add_argument("--phase-id", default="approach")
-    parser.add_argument("--checkpoint-metadata", required=True)
+    parser.add_argument("--checkpoint-metadata")
     parser.add_argument("--host", default="192.168.1.104")
     parser.add_argument("--port", type=int, default=8017)
     parser.add_argument("--policy-frequency-hz", type=float, default=20.0)
     parser.add_argument("--command-topic", default="/piper_joint_commands")
     parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument("--joint-topic", default="/joint_states_single")
+    parser.add_argument("--exterior-image-topic", default="/table_camera/color/image_raw")
+    parser.add_argument("--wrist-image-topic", default="/cam_left_wrist")
+    parser.add_argument("--no-wrist", action="store_true", help="Use a zero wrist image if the wrist camera is unavailable.")
     parser.add_argument("--execute", action="store_true", help="Required for physical publishing.")
     args = parser.parse_args()
 
+    orchestrator = PhaseOrchestrator(policy_client=OpenPIPiperClient(args.host, args.port), frequency_hz=args.policy_frequency_hz)
+    plan = orchestrator.plan_task(args.instruction)
+    phase = next((item for item in plan.phases if item.phase_id == args.phase_id), None)
+    if phase is None:
+        raise SystemExit(f"Unknown phase id: {args.phase_id}")
+
+    wrist_topic = None if args.no_wrist else args.wrist_image_topic
+    live = read_live_openpi_observation(
+        timeout_s=args.timeout,
+        joint_topic=args.joint_topic,
+        exterior_image_topic=args.exterior_image_topic,
+        wrist_image_topic=wrist_topic,
+    )
+
     if not args.execute:
-        raise SystemExit("This is the physical runner. Use --execute, or use run_openpi_piper_live_shadow.py.")
+        print(
+            json.dumps(
+                {
+                    "plan": plan.to_dict(),
+                    "phase": phase.to_dict(),
+                    "live_observation": live.to_summary(),
+                    "checkpoint_metadata_required_for_execute": True,
+                    "execution_allowed": False,
+                    "physical_motion_performed": False,
+                    "reason": "preflight only; pass --execute with a validated PiPER-compatible checkpoint to publish commands",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+
+    if not args.checkpoint_metadata:
+        raise SystemExit("--checkpoint-metadata is required with --execute")
 
     try:
         metadata = load_checkpoint_metadata(args.checkpoint_metadata)
@@ -69,13 +105,6 @@ def main() -> int:
     except ValueError as exc:
         raise SystemExit(f"Physical OpenPI PiPER execution refused: {exc}") from exc
 
-    orchestrator = PhaseOrchestrator(policy_client=OpenPIPiperClient(args.host, args.port), frequency_hz=args.policy_frequency_hz)
-    plan = orchestrator.plan_task(args.instruction)
-    phase = next((item for item in plan.phases if item.phase_id == args.phase_id), None)
-    if phase is None:
-        raise SystemExit(f"Unknown phase id: {args.phase_id}")
-
-    live = read_live_openpi_observation(timeout_s=args.timeout)
     observation = make_observation(live.exterior_image, live.wrist_image, live.state, phase.policy_prompt)
     payload = orchestrator.policy_client.infer_phase(observation)
     response = validate_openpi_response(

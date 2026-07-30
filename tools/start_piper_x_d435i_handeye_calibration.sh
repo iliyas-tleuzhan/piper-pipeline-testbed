@@ -34,10 +34,10 @@ for node in $(rosnode list 2>/dev/null || true); do
     /piper_joint_state_relay|\
     /piper_ctrl_single_node|\
     /tf_echo_*)
-      rosnode kill "$node" >/dev/null 2>&1 || true
+      timeout 3 rosnode kill "$node" >/dev/null 2>&1 || true
       ;;
     /realsense_d555_py_publisher_*)
-      rosnode kill "$node" >/dev/null 2>&1 || true
+      timeout 3 rosnode kill "$node" >/dev/null 2>&1 || true
       ;;
   esac
 done
@@ -91,7 +91,9 @@ for name in os.listdir("/proc"):
             pass
         break
 PY
-rosnode cleanup >/dev/null 2>&1 || true
+rosparam delete /aruco_simple >/dev/null 2>&1 || true
+rosparam delete /piper_x_aruco_pose_node >/dev/null 2>&1 || true
+timeout 3 rosnode cleanup >/dev/null 2>&1 || true
 '
 
 STAGE="/tmp/piper_x_handeye"
@@ -124,6 +126,9 @@ send_window aruco "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix export
 send_window handeye_backend "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix roslaunch easy_handeye calibrate.launch eye_on_hand:=true namespace_prefix:=piper_x_d435i_wrist freehand_robot_movement:=true robot_base_frame:=base_link robot_effector_frame:=gripper_base tracking_base_frame:=wrist_camera_color_optical_frame tracking_marker_frame:=aruco_marker_frame start_rviz:=false start_sampling_gui:=false'"
 
 tmux select-window -t "$SESSION:handeye_backend"
+for window in roscore piper_driver_readonly joint_relay robot_state_pub d435i_wrist image_rectify aruco handeye_backend; do
+  tmux clear-history -t "$SESSION:$window" 2>/dev/null || true
+done
 echo "Started detached tmux session: $SESSION"
 echo "Marker dictionary: $MARKER_DICTIONARY"
 echo "Marker ID: $MARKER_ID"

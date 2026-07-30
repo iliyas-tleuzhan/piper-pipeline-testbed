@@ -59,6 +59,11 @@ def main() -> int:
     rospy.set_param("~marker_size_m", marker_size_m)
     rospy.set_param("~camera_frame", camera_frame)
     rospy.set_param("~marker_frame", marker_frame)
+    rospy.set_param("/aruco_simple/dictionary", dictionary)
+    rospy.set_param("/aruco_simple/marker_id", marker_id)
+    rospy.set_param("/aruco_simple/marker_size", marker_size_m)
+    rospy.set_param("/aruco_simple/camera_frame", camera_frame)
+    rospy.set_param("/aruco_simple/marker_frame", marker_frame)
 
     def on_info(msg: CameraInfo) -> None:
         latest_info["matrix"] = list(msg.K)

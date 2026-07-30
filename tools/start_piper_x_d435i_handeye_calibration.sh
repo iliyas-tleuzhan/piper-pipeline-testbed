@@ -6,7 +6,7 @@ CONTAINER="${CONTAINER:-abot-piper-noetic}"
 CAMERA_SERIAL="${CAMERA_SERIAL:-243322074578}"
 MARKER_ID="${MARKER_ID:-6}"
 MARKER_SIZE_M="${MARKER_SIZE_M:-0.100}"
-MARKER_DICTIONARY="${MARKER_DICTIONARY:-DICT_4X4_50}"
+MARKER_DICTIONARY="${MARKER_DICTIONARY:-DICT_ARUCO_ORIGINAL}"
 CAN_INTERFACE="${CAN_INTERFACE:-can0}"
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
@@ -122,7 +122,7 @@ send_window joint_relay "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix 
 send_window robot_state_pub "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix while ! timeout 2 rostopic echo -n 1 /joint_states >/dev/null 2>&1; do echo waiting for /joint_states; sleep 1; done; rosparam set --textfile=\$(rospack find piper_description)/urdf/piper_description.urdf /robot_description; rosrun robot_state_publisher robot_state_publisher __name:=robot_state_publisher'"
 send_window d435i_wrist "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix cd /root/ABot-Claw/robot_layer/arm_piper/agent_server; python3 realsense_d555_py_publisher.py --camera wrist_camera --serial $CAMERA_SERIAL --width 640 --height 480 --fps 15'"
 send_window image_rectify "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_raw >/dev/null 2>&1; do echo waiting for wrist raw image; sleep 1; done; rosrun image_proc image_proc __name:=image_proc __ns:=/wrist_camera/color'"
-send_window aruco "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix export PYTHONPATH=$STAGE/src:\${PYTHONPATH:-}; while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_rect_color >/dev/null 2>&1; do echo waiting for rectified wrist image; sleep 1; done; python3 $STAGE/scripts/piper_x_aruco_pose_node.py _image_topic:=/wrist_camera/color/image_rect_color _camera_info_topic:=/wrist_camera/color/camera_info _pose_topic:=/aruco_simple/pose _dictionary:=$MARKER_DICTIONARY _marker_id:=$MARKER_ID _marker_size_m:=$MARKER_SIZE_M _camera_frame:=wrist_camera_color_optical_frame _marker_frame:=aruco_marker_frame'"
+send_window aruco "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix export PYTHONPATH=$STAGE/src:\${PYTHONPATH:-}; while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_rect_color >/dev/null 2>&1; do echo waiting for rectified wrist image; sleep 1; done; python3 $STAGE/scripts/piper_x_aruco_pose_node.py _image_topic:=/wrist_camera/color/image_rect_color _camera_info_topic:=/wrist_camera/color/camera_info _pose_topic:=/aruco_simple/pose _debug_image_topic:=/aruco_simple/debug_image _dictionary:=$MARKER_DICTIONARY _marker_id:=$MARKER_ID _marker_size_m:=$MARKER_SIZE_M _camera_frame:=wrist_camera_color_optical_frame _marker_frame:=aruco_marker_frame'"
 send_window handeye_backend "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix roslaunch easy_handeye calibrate.launch eye_on_hand:=true namespace_prefix:=piper_x_d435i_wrist freehand_robot_movement:=true robot_base_frame:=base_link robot_effector_frame:=gripper_base tracking_base_frame:=wrist_camera_color_optical_frame tracking_marker_frame:=aruco_marker_frame start_rviz:=false start_sampling_gui:=false'"
 
 tmux select-window -t "$SESSION:handeye_backend"

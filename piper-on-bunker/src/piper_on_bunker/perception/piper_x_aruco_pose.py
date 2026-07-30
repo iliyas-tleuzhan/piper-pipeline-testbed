@@ -23,6 +23,7 @@ class PiperXArucoPoseResult:
     reason: str | None
     center_uv: tuple[float, float] | None = None
     corners: list[list[float]] | None = None
+    all_corners: list[list[list[float]]] | None = None
     pixel_area: float | None = None
     rvec: list[float] | None = None
     tvec: list[float] | None = None
@@ -72,19 +73,19 @@ def detect_piper_x_aruco_pose(
     if dictionary_id is None:
         return PiperXArucoPoseResult(False, f"unknown aruco dictionary {config.dictionary}")
 
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
-    if hasattr(cv2.aruco, "ArucoDetector"):
-        detector = cv2.aruco.ArucoDetector(dictionary)
-        corners, ids, _ = detector.detectMarkers(gray)
-    else:
-        corners, ids, _ = cv2.aruco.detectMarkers(gray, dictionary)
+    corners, ids = detect_marker_corners(arr, config.dictionary)
     if ids is None or len(ids) == 0:
         return PiperXArucoPoseResult(False, "marker not visible")
 
     flat_ids = [int(v) for v in np.asarray(ids).reshape(-1)]
+    all_corners = [np.asarray(corner, dtype=np.float64).reshape(4, 2).tolist() for corner in corners]
     if config.marker_id not in flat_ids:
-        return PiperXArucoPoseResult(False, "configured marker id not detected", detected_marker_ids=flat_ids)
+        return PiperXArucoPoseResult(
+            False,
+            "configured marker id not detected",
+            all_corners=all_corners,
+            detected_marker_ids=flat_ids,
+        )
 
     index = flat_ids.index(config.marker_id)
     marker_corners = np.asarray(corners[index], dtype=np.float64).reshape(4, 2)
@@ -128,12 +129,114 @@ def detect_piper_x_aruco_pose(
         reason=None,
         center_uv=(float(center[0]), float(center[1])),
         corners=marker_corners.tolist(),
+        all_corners=all_corners,
         pixel_area=float(abs(_polygon_area(marker_corners))),
         rvec=rvec.tolist(),
         tvec=tvec.tolist(),
         quaternion_xyzw=quat,
         detected_marker_ids=flat_ids,
     )
+
+
+def detect_piper_x_aruco_markers_only(
+    image_rgb: np.ndarray,
+    config: PiperXArucoPoseConfig = PiperXArucoPoseConfig(),
+    reason: str = "pose unavailable",
+) -> PiperXArucoPoseResult:
+    arr = np.asarray(image_rgb)
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        return PiperXArucoPoseResult(False, f"expected RGB image HxWx3, got {arr.shape}")
+    if arr.dtype != np.uint8:
+        return PiperXArucoPoseResult(False, f"expected uint8 image, got {arr.dtype}")
+    try:
+        corners, ids = detect_marker_corners(arr, config.dictionary)
+    except Exception as exc:
+        return PiperXArucoPoseResult(False, str(exc))
+    if ids is None or len(ids) == 0:
+        return PiperXArucoPoseResult(False, "marker not visible")
+    flat_ids = [int(v) for v in np.asarray(ids).reshape(-1)]
+    all_corners = [np.asarray(corner, dtype=np.float64).reshape(4, 2).tolist() for corner in corners]
+    if config.marker_id not in flat_ids:
+        return PiperXArucoPoseResult(False, "configured marker id not detected", all_corners=all_corners, detected_marker_ids=flat_ids)
+    index = flat_ids.index(config.marker_id)
+    marker_corners = np.asarray(corners[index], dtype=np.float64).reshape(4, 2)
+    center = marker_corners.mean(axis=0)
+    return PiperXArucoPoseResult(
+        False,
+        reason,
+        center_uv=(float(center[0]), float(center[1])),
+        corners=marker_corners.tolist(),
+        all_corners=all_corners,
+        pixel_area=float(abs(_polygon_area(marker_corners))),
+        detected_marker_ids=flat_ids,
+    )
+
+
+def detect_marker_corners(image_rgb: np.ndarray, dictionary_name: str) -> tuple[list[np.ndarray], np.ndarray | None]:
+    import cv2
+
+    arr = np.asarray(image_rgb)
+    dictionary_id = getattr(cv2.aruco, dictionary_name, None)
+    if dictionary_id is None:
+        raise ValueError(f"unknown aruco dictionary {dictionary_name}")
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
+    if hasattr(cv2.aruco, "ArucoDetector"):
+        detector = cv2.aruco.ArucoDetector(dictionary)
+        corners, ids, _ = detector.detectMarkers(gray)
+    else:
+        corners, ids, _ = cv2.aruco.detectMarkers(gray, dictionary)
+    return list(corners), ids
+
+
+def render_debug_image_rgb(
+    image_rgb: np.ndarray,
+    result: PiperXArucoPoseResult,
+    config: PiperXArucoPoseConfig,
+    camera_matrix: Any | None = None,
+    dist_coeffs: Any | None = None,
+) -> np.ndarray:
+    import cv2
+
+    debug = np.asarray(image_rgb).copy()
+    detected_ids = result.detected_marker_ids or []
+    if result.all_corners and detected_ids:
+        draw_corners = [np.asarray(corner, dtype=np.float32).reshape(1, 4, 2) for corner in result.all_corners]
+        cv2.aruco.drawDetectedMarkers(debug, draw_corners, np.asarray(detected_ids, dtype=np.int32).reshape(-1, 1))
+
+    if result.corners is not None:
+        selected = np.asarray(result.corners, dtype=np.int32).reshape(4, 2)
+        cv2.polylines(debug, [selected], isClosed=True, color=(255, 255, 0), thickness=4)
+        if result.center_uv is not None:
+            cv2.circle(debug, (int(result.center_uv[0]), int(result.center_uv[1])), 6, (255, 0, 0), -1)
+
+    pose_available = result.visible and result.rvec is not None and result.tvec is not None
+    if pose_available and camera_matrix is not None and camera_info_is_valid(camera_matrix):
+        try:
+            axis_length = float(config.marker_size_m) * 0.5
+            cv2.drawFrameAxes(
+                debug,
+                np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3),
+                np.asarray(dist_coeffs if dist_coeffs is not None else [0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64).reshape(-1),
+                np.asarray(result.rvec, dtype=np.float64).reshape(3, 1),
+                np.asarray(result.tvec, dtype=np.float64).reshape(3, 1),
+                axis_length,
+            )
+        except Exception:
+            pass
+
+    if result.visible:
+        status = f"{config.dictionary} id={config.marker_id} size={config.marker_size_m:.3f}m DETECTED"
+    elif result.corners is not None:
+        status = f"{config.dictionary} marker {config.marker_id} detected, pose unavailable"
+    else:
+        status = f"{config.dictionary} marker {config.marker_id} not detected"
+    reason = "" if result.visible or not result.reason else f" ({result.reason})"
+    cv2.rectangle(debug, (8, 8), (min(debug.shape[1] - 1, 620), 72), (0, 0, 0), -1)
+    cv2.putText(debug, status, (16, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2, cv2.LINE_AA)
+    if reason:
+        cv2.putText(debug, reason[:70], (16, 62), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 0), 1, cv2.LINE_AA)
+    return debug
 
 
 def _rvec_to_quaternion_xyzw(rvec: np.ndarray) -> list[float]:

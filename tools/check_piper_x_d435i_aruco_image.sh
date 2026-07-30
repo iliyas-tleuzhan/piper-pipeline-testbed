@@ -3,7 +3,7 @@ set -euo pipefail
 
 CONTAINER="${CONTAINER:-abot-piper-noetic}"
 MARKER_ID="${MARKER_ID:-6}"
-MARKER_DICTIONARY="${MARKER_DICTIONARY:-DICT_4X4_50}"
+MARKER_DICTIONARY="${MARKER_DICTIONARY:-DICT_ARUCO_ORIGINAL}"
 
 docker exec -i "$CONTAINER" bash -lc '
 source /opt/ros/noetic/setup.bash
@@ -19,6 +19,7 @@ from sensor_msgs.msg import Image
 import cv2
 
 topic = "/wrist_camera/color/image_rect_color"
+debug_topic = "/aruco_simple/debug_image"
 dictionary_name = "'"$MARKER_DICTIONARY"'"
 marker_id = int("'"$MARKER_ID"'")
 rospy.init_node("check_piper_x_d435i_aruco_image", anonymous=True, disable_signals=True)
@@ -43,6 +44,16 @@ print("required_marker_id:", marker_id)
 print("detected_marker_ids:", detected)
 print("rejected_candidates:", len(rejected) if rejected is not None else 0)
 print("marker_id_visible:", marker_id in detected)
+try:
+    debug_msg = rospy.wait_for_message(debug_topic, Image, timeout=5)
+    print("debug_topic:", debug_topic)
+    print("debug_topic_live:", True)
+    print("debug_header_frame_id:", debug_msg.header.frame_id)
+except Exception as exc:
+    print("debug_topic:", debug_topic)
+    print("debug_topic_live:", False)
+    print("debug_error:", exc)
+    raise SystemExit(3)
 raise SystemExit(0 if marker_id in detected else 2)
 PY
 '

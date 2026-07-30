@@ -16,7 +16,26 @@ import numpy as np
 
 from piper_on_bunker.perception.piper_x_aruco_pose import PiperXArucoPoseConfig
 from piper_on_bunker.perception.piper_x_aruco_pose import camera_info_is_valid
+from piper_on_bunker.perception.piper_x_aruco_pose import detect_piper_x_aruco_markers_only
 from piper_on_bunker.perception.piper_x_aruco_pose import detect_piper_x_aruco_pose
+from piper_on_bunker.perception.piper_x_aruco_pose import render_debug_image_rgb
+
+
+def preserve_image_header(debug_msg, source_msg):
+    debug_msg.header = source_msg.header
+    return debug_msg
+
+
+def rgb_array_to_image_msg(image_rgb, source_msg, image_cls):
+    msg = image_cls()
+    preserve_image_header(msg, source_msg)
+    msg.height = int(image_rgb.shape[0])
+    msg.width = int(image_rgb.shape[1])
+    msg.encoding = "rgb8"
+    msg.is_bigendian = 0
+    msg.step = int(image_rgb.shape[1]) * 3
+    msg.data = image_rgb.tobytes()
+    return msg
 
 
 def main() -> int:
@@ -25,7 +44,7 @@ def main() -> int:
             "usage: piper_x_aruco_pose_node.py "
             "_image_topic:=/wrist_camera/color/image_rect_color "
             "_camera_info_topic:=/wrist_camera/color/camera_info "
-            "_dictionary:=DICT_4X4_50 _marker_id:=6 _marker_size_m:=0.100"
+            "_dictionary:=DICT_ARUCO_ORIGINAL _marker_id:=6 _marker_size_m:=0.100"
         )
         return 0
 
@@ -39,7 +58,8 @@ def main() -> int:
     image_topic = rospy.get_param("~image_topic", "/wrist_camera/color/image_rect_color")
     camera_info_topic = rospy.get_param("~camera_info_topic", "/wrist_camera/color/camera_info")
     pose_topic = rospy.get_param("~pose_topic", "/aruco_simple/pose")
-    dictionary = rospy.get_param("~dictionary", "DICT_4X4_50")
+    debug_image_topic = rospy.get_param("~debug_image_topic", "/aruco_simple/debug_image")
+    dictionary = rospy.get_param("~dictionary", "DICT_ARUCO_ORIGINAL")
     marker_id = int(rospy.get_param("~marker_id", 6))
     marker_size_m = float(rospy.get_param("~marker_size_m", 0.100))
     camera_frame = rospy.get_param("~camera_frame", "wrist_camera_color_optical_frame")
@@ -52,6 +72,7 @@ def main() -> int:
     last_log = 0.0
     last_visible = False
     pose_pub = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
+    debug_pub = rospy.Publisher(debug_image_topic, Image, queue_size=1)
     tf_pub = tf2_ros.TransformBroadcaster()
 
     rospy.set_param("~dictionary", dictionary)
@@ -64,6 +85,7 @@ def main() -> int:
     rospy.set_param("/aruco_simple/marker_size", marker_size_m)
     rospy.set_param("/aruco_simple/camera_frame", camera_frame)
     rospy.set_param("/aruco_simple/marker_frame", marker_frame)
+    rospy.set_param("/aruco_simple/debug_image_topic", debug_image_topic)
 
     def on_info(msg: CameraInfo) -> None:
         latest_info["matrix"] = list(msg.K)
@@ -81,9 +103,6 @@ def main() -> int:
 
     def on_image(msg: Image) -> None:
         matrix = latest_info["matrix"]
-        if not camera_info_is_valid(matrix, latest_info["width"], latest_info["height"]):
-            maybe_log("Refusing ArUco pose: invalid or missing CameraInfo")
-            return
         try:
             import cv2
 
@@ -94,7 +113,13 @@ def main() -> int:
         except Exception as exc:
             maybe_log(f"Refusing ArUco pose: image conversion failed: {exc}")
             return
-        result = detect_piper_x_aruco_pose(image_rgb, matrix, latest_info["dist"], config)
+        if camera_info_is_valid(matrix, latest_info["width"], latest_info["height"]):
+            result = detect_piper_x_aruco_pose(image_rgb, matrix, latest_info["dist"], config)
+        else:
+            result = detect_piper_x_aruco_markers_only(image_rgb, config, reason="invalid or missing CameraInfo")
+
+        debug_rgb = render_debug_image_rgb(image_rgb, result, config, matrix, latest_info["dist"])
+        debug_pub.publish(rgb_array_to_image_msg(debug_rgb, msg, Image))
         if not result.visible:
             maybe_log(f"ArUco marker {marker_id} not published: {result.reason}")
             return

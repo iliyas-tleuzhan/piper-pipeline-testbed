@@ -24,12 +24,14 @@ The camera is mounted on the PiPER-X wrist. The ArUco marker is stationary on a 
 Use the measured black-square side length:
 
 ```text
-dictionary: DICT_4X4_50
+dictionary: DICT_ARUCO_ORIGINAL
 marker_id: 6
 marker_size_m: 0.100
 ```
 
 The old `0.040 m` value is wrong for this marker and must not be used for this calibration.
+
+Do not confuse this physical calibration marker with the OpenPI PiPER-X ArUco touch task profile. The current OpenPI task profile still declares `DICT_4X4_50` for future dataset/task work. The marker physically in view for this hand-eye calibration is detected as `DICT_ARUCO_ORIGINAL`, ID `6`.
 
 The PiPER-X task profile also records this value at:
 
@@ -92,14 +94,15 @@ The `aruco` pane runs the repo OpenCV detector:
 piper-on-bunker/scripts/piper_x_aruco_pose_node.py
 ```
 
-It explicitly uses `DICT_4X4_50`, marker ID `6`, and marker size `0.100 m`. It publishes the same contract expected by `easy_handeye`:
+It explicitly uses `DICT_ARUCO_ORIGINAL`, marker ID `6`, and marker size `0.100 m` by default. It publishes the same contract expected by `easy_handeye`:
 
 ```text
 /aruco_simple/pose
+/aruco_simple/debug_image
 wrist_camera_color_optical_frame -> aruco_marker_frame
 ```
 
-It publishes no robot commands and does not replay stale transforms after marker loss.
+It publishes no robot commands and does not replay stale transforms after marker loss. The raw image topics do not contain overlays; use `/aruco_simple/debug_image` for the annotated view.
 
 ## Readiness Check
 
@@ -121,7 +124,7 @@ The check verifies:
 - `base_link -> gripper_base` TF is live;
 - `/aruco_simple/pose` is live;
 - `wrist_camera_color_optical_frame -> aruco_marker_frame` TF is live;
-- marker dictionary is `DICT_4X4_50`;
+- marker dictionary is `DICT_ARUCO_ORIGINAL`;
 - marker ID is `6`;
 - marker size source of truth is `0.100 m`;
 - easy_handeye backend is running;
@@ -136,7 +139,43 @@ cd ~/piper-pipeline-testbed
 ./tools/check_piper_x_d435i_aruco_image.sh
 ```
 
-This reports the detected ArUco IDs and rejected candidates for `DICT_4X4_50`. If `detected_marker_ids` is empty, the marker is not visible enough, is blurred, too small, too oblique, partly cropped, badly lit, or was printed from a different dictionary.
+This reports the detected ArUco IDs, rejected candidates, and whether `/aruco_simple/debug_image` is live for `DICT_ARUCO_ORIGINAL`. If `detected_marker_ids` is empty, the marker is not visible enough, is blurred, too small, too oblique, partly cropped, badly lit, or was printed from a different dictionary.
+
+## Debug Image
+
+Raw and rectified camera topics show only camera pixels:
+
+```text
+/wrist_camera/color/image_raw
+/wrist_camera/color/image_rect_color
+```
+
+The annotated feed is:
+
+```text
+/aruco_simple/debug_image
+```
+
+Open it with:
+
+```bash
+cd ~/piper-pipeline-testbed
+./tools/open_piper_x_d435i_aruco_debug_view.sh
+```
+
+The debug image preserves the input image timestamp and frame ID. It draws detected marker borders, highlights configured marker ID `6`, writes dictionary/ID/size/status text, and draws XYZ axes when pose is available.
+
+Before saving hand-eye calibration, set RViz `Fixed Frame` to:
+
+```text
+wrist_camera_color_optical_frame
+```
+
+After publishing a saved hand-eye calibration, you can use:
+
+```text
+base_link
+```
 
 ## Sampling GUI
 
@@ -225,7 +264,8 @@ Record these fields with the dataset/calibration manifest:
 - PiPER-X serial/config identifier;
 - D435i serial `243322074578`;
 - camera mount revision;
-- marker dictionary `DICT_4X4_50`;
+- physical calibration marker dictionary `DICT_ARUCO_ORIGINAL`;
+- OpenPI task profile marker dictionary `DICT_4X4_50`;
 - marker ID `6`;
 - measured marker size `0.100 m`;
 - target surface orientation `vertical`;

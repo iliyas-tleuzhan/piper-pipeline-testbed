@@ -16,11 +16,24 @@ SCRIPTS = [
 ]
 
 
+SHELL_SCRIPTS = [
+    "tools/check_piper_x_d435i_aruco_image.sh",
+    "tools/open_piper_x_d435i_aruco_debug_view.sh",
+    "tools/start_piper_x_d435i_handeye_calibration.sh",
+]
+
+
 def test_new_piper_x_clis_have_help():
     for script in SCRIPTS:
         proc = subprocess.run(["python3", script, "--help"], text=True, capture_output=True, check=False)
         assert proc.returncode == 0, proc.stderr
         assert "usage:" in proc.stdout
+
+
+def test_debug_helper_shell_syntax():
+    for script in SHELL_SCRIPTS:
+        proc = subprocess.run(["bash", "-n", script], text=True, capture_output=True, check=False)
+        assert proc.returncode == 0, proc.stderr
 
 
 def test_read_only_preflight_skip_ros_reports_blockers_without_motion():

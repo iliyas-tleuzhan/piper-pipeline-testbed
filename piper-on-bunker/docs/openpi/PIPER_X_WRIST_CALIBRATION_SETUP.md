@@ -194,6 +194,22 @@ ROS_NAMESPACE=/piper_x_d435i_wrist_eye_on_hand
 
 The tmux session intentionally does not start RViz or the sampling GUI.
 
+## Compute Crash From Wrong OpenCV
+
+If the sampling GUI closes or the backend logs this error after pressing `Compute`:
+
+```text
+module 'cv2' has no attribute 'calibrateHandEye'
+```
+
+the active Python process imported the `/usr/local` OpenCV package instead of the ROS/system OpenCV package. The launcher forces the easy_handeye backend to use:
+
+```text
+PYTHONPATH=/usr/lib/python3/dist-packages
+```
+
+because the system OpenCV `4.2.0` includes both ArUco and `cv2.calibrateHandEye`. The `/usr/local` OpenCV `5.0.0` package has ArUco in this container but does not expose `calibrateHandEye`.
+
 ## Sample Procedure
 
 Use the already-proven PiPER-X teleoperation system to manually reposition the arm between samples. Keep this calibration stack read-only.

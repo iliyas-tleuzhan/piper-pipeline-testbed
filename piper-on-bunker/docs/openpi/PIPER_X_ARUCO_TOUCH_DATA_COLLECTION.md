@@ -31,11 +31,75 @@ cd ~/piper-pipeline-testbed
   python3 piper-on-bunker/scripts/inspect_piper_x_aruco_collection_environment.py \
     --profile piper-on-bunker/config/openpi_piper_x_touch_aruco.yaml \
     --can-interface can0 \
+    --action-source ros_command_topic \
+    --command-topic /piper_x_joint_commands \
     --marker-id 6 \
-    --marker-size-m 0.040
+    --marker-size-m 0.040 \
+    --fixed-gripper-target 0.0
 ```
 
 This does not enable the arm, publish commands, change CAN configuration, calibrate hardware, or move the robot.
+
+The preflight requires a fresh wrist image, fresh state, and a fresh `sensor_msgs/JointState` command-label message. It also requires `can0` to be UP and ERROR-ACTIVE. The fixed gripper value above is only an example; use the measured safe hold value or let the recorder capture it from startup state when the state topic exposes a valid `gripper` field.
+
+## Action-Topic Verification
+
+Before keeping any demonstrations, verify that the action-label topic is the exact converted absolute target stream that the follower/slave receives.
+
+Check the message type:
+
+```bash
+cd ~/piper-pipeline-testbed
+
+./tools/run_in_noetic_container.sh \
+  bash -lc 'source /opt/ros/noetic/setup.bash && rostopic type /piper_x_joint_commands'
+```
+
+It must be:
+
+```text
+sensor_msgs/JointState
+```
+
+Check the publisher and rate:
+
+```bash
+cd ~/piper-pipeline-testbed
+
+./tools/run_in_noetic_container.sh \
+  bash -lc 'source /opt/ros/noetic/setup.bash && rostopic info /piper_x_joint_commands && rostopic hz /piper_x_joint_commands'
+```
+
+Check the joint names and one sample:
+
+```bash
+cd ~/piper-pipeline-testbed
+
+./tools/run_in_noetic_container.sh \
+  bash -lc 'source /opt/ros/noetic/setup.bash && rostopic echo -n 1 /piper_x_joint_commands'
+```
+
+The message must contain exactly these six arm targets:
+
+```text
+joint1 joint2 joint3 joint4 joint5 joint6
+```
+
+The recorder appends the fixed gripper target as channel 7.
+
+### One-Joint-At-A-Time Label Check
+
+With the teleoperation/follower system running in its normal demonstration mode, move only one leader joint at a time by a small amount while watching `/piper_x_joint_commands`.
+
+For each joint:
+
+1. Move only `jointN` slowly.
+2. Confirm only the matching `jointN` command value changes meaningfully.
+3. Confirm the sign is correct.
+4. Confirm the value is in radians and absolute target units.
+5. Return to the start pose before checking the next joint.
+
+Physical follower motion does not prove the recorded action labels are correct. A follower can move while the recorder is subscribed to the wrong topic, a pre-clamped topic, a feedback topic, stale CAN frames, or a stream with swapped/sign-flipped joints. Do not keep demos until this one-joint-at-a-time check passes.
 
 ## Five Throwaway Pilot Recordings
 
@@ -52,12 +116,15 @@ cd ~/piper-pipeline-testbed
     --command-topic /piper_x_joint_commands \
     --wrist-image-topic /piper_x/wrist_camera/image_raw \
     --state-topic /joint_states_single \
+    --max-image-age-s 0.5 \
+    --max-state-age-s 0.5 \
+    --max-action-age-s 0.5 \
     --marker-id 6 \
     --marker-size-m 0.040 \
     --operator-notes "throwaway pilot 1"
 ```
 
-Repeat for pilots 2-5 with different notes. The recorder is passive and never commands motion. It samples synchronized image/state/action rows at 20 Hz by default.
+Repeat for pilots 2-5 with different notes. The recorder is passive and never commands motion. It samples synchronized image/state/action rows at 20 Hz by default. It refuses to create an episode until wrist image, state, and action labels are present and fresh.
 
 ## Outcome Labeling
 

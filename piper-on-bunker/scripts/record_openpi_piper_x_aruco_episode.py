@@ -51,12 +51,26 @@ def _joint_state_to_7d(msg: Any, joint_order: tuple[str, ...], fixed_gripper: fl
     return values
 
 
+def _capture_gripper_from_state(msg: Any, gripper_name: str) -> float:
+    names = list(getattr(msg, "name", []))
+    positions = list(getattr(msg, "position", []))
+    by_name = {str(name): float(pos) for name, pos in zip(names, positions)}
+    if gripper_name not in by_name:
+        raise ValueError(
+            f"state message does not contain {gripper_name!r}; pass --fixed-gripper-target explicitly"
+        )
+    return float(by_name[gripper_name])
+
+
 def _command_msg_to_action(msg: Any, joint_order: tuple[str, ...], fixed_gripper: float) -> list[float]:
     names = list(getattr(msg, "name", []))
     positions = list(getattr(msg, "position", []))
     if not names or len(positions) < 6:
         raise ValueError("command topic must publish sensor_msgs/JointState with names and positions")
     by_name = {name: float(pos) for name, pos in zip(names, positions)}
+    missing = [name for name in joint_order[:6] if name not in by_name]
+    if missing:
+        raise ValueError(f"command topic missing required arm joint names: {missing}")
     action = [by_name[name] for name in joint_order[:6]]
     action.append(float(fixed_gripper))
     return action
@@ -76,6 +90,43 @@ def _ros_image_to_rgb(msg: Any) -> np.ndarray:
     return np.asarray(cv_img, dtype=np.uint8)
 
 
+def _streams_ready(
+    *,
+    latest_wrist: Latest,
+    latest_state: Latest,
+    latest_action: Latest,
+    max_image_age_s: float,
+    max_state_age_s: float,
+    max_action_age_s: float,
+) -> tuple[bool, list[str], dict[str, float]]:
+    ages = {
+        "wrist_image_age_s": latest_wrist.age_s(),
+        "state_age_s": latest_state.age_s(),
+        "action_age_s": latest_action.age_s(),
+    }
+    failures: list[str] = []
+    if latest_wrist.value is None:
+        failures.append("missing wrist image")
+    if latest_state.value is None:
+        failures.append("missing state")
+    if latest_action.value is None:
+        failures.append("missing action")
+    if latest_wrist.value is not None and ages["wrist_image_age_s"] > max_image_age_s:
+        failures.append(f"stale wrist image: {ages['wrist_image_age_s']:.3f}s")
+    if latest_state.value is not None and ages["state_age_s"] > max_state_age_s:
+        failures.append(f"stale state: {ages['state_age_s']:.3f}s")
+    if latest_action.value is not None and ages["action_age_s"] > max_action_age_s:
+        failures.append(f"stale action: {ages['action_age_s']:.3f}s")
+    return not failures, failures, ages
+
+
+def _finalize_episode(episode_dir: Path, summary: dict[str, Any], *, clean: bool) -> None:
+    write_json_atomic(episode_dir / "summary.json", summary)
+    incomplete = episode_dir / INCOMPLETE_MARKER
+    if clean and incomplete.exists():
+        incomplete.unlink()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--instruction", default=PIPER_X_DEFAULT_PROMPT)
@@ -87,6 +138,10 @@ def main() -> int:
     parser.add_argument("--action-source", default="ros_command_topic", choices=["ros_command_topic", "socketcan_command_frames", "pyagxarm_leader_feedback"])
     parser.add_argument("--command-topic")
     parser.add_argument("--fixed-gripper-target", type=float)
+    parser.add_argument("--fixed-gripper-source", choices=["startup_state", "explicit"], default="startup_state")
+    parser.add_argument("--max-image-age-s", type=float, default=0.5)
+    parser.add_argument("--max-state-age-s", type=float, default=0.5)
+    parser.add_argument("--max-action-age-s", type=float, default=0.5)
     parser.add_argument("--marker-id", type=int)
     parser.add_argument("--marker-size-m", type=float)
     parser.add_argument("--operator-notes")
@@ -104,13 +159,6 @@ def main() -> int:
     fps = float(args.fps or profile.raw["collection"]["fps"])
     period = 1.0 / fps
     output_root = Path(args.episode_root or profile.raw["output_dataset_root"])
-    episode_id = f"piper_x_aruco_{int(time.time())}_{uuid.uuid4().hex[:8]}"
-    episode_dir = output_root / episode_id
-    (episode_dir / "images" / "wrist").mkdir(parents=True, exist_ok=True)
-    (episode_dir / "images" / "exterior").mkdir(parents=True, exist_ok=True)
-    (episode_dir / INCOMPLETE_MARKER).write_text("recording\n", encoding="utf-8")
-
-    fixed_gripper = float(args.fixed_gripper_target if args.fixed_gripper_target is not None else 0.0)
     wrist_topic = args.wrist_image_topic or profile.raw["camera"]["wrist_image_topic"]
     state_topic = args.state_topic or profile.raw["feedback"]["state_topic"]
     command_topic = args.command_topic or profile.raw["command_labels"]["ros_command_topic"]
@@ -122,19 +170,57 @@ def main() -> int:
     latest_state = Latest()
     latest_action = Latest()
     joint_order = profile.joint_order
+    fixed_gripper: float | None = float(args.fixed_gripper_target) if args.fixed_gripper_target is not None else None
+    fixed_gripper_source = "explicit_cli" if args.fixed_gripper_target is not None else "startup_state"
+    if args.fixed_gripper_source == "explicit" and fixed_gripper is None:
+        raise SystemExit("--fixed-gripper-source explicit requires --fixed-gripper-target")
 
     def on_image(msg: Any) -> None:
         latest_wrist.update(_ros_image_to_rgb(msg), getattr(msg.header.stamp, "to_sec", lambda: time.time())())
 
     def on_state(msg: Any) -> None:
+        nonlocal fixed_gripper, fixed_gripper_source
+        if fixed_gripper is None:
+            fixed_gripper = _capture_gripper_from_state(msg, joint_order[6])
+            fixed_gripper_source = f"startup_state:{joint_order[6]}"
         latest_state.update(_joint_state_to_7d(msg, joint_order, fixed_gripper), getattr(msg.header.stamp, "to_sec", lambda: time.time())())
 
     def on_command(msg: Any) -> None:
+        if fixed_gripper is None:
+            return
         latest_action.update(_command_msg_to_action(msg, joint_order, fixed_gripper), getattr(msg.header.stamp, "to_sec", lambda: time.time())())
 
     rospy.Subscriber(wrist_topic, Image, on_image, queue_size=1)
     rospy.Subscriber(state_topic, JointState, on_state, queue_size=20)
     rospy.Subscriber(command_topic, JointState, on_command, queue_size=20)
+
+    deadline = time.time() + max(0.1, args.max_image_age_s, args.max_state_age_s, args.max_action_age_s, 1.0)
+    ready = False
+    failures: list[str] = []
+    ages: dict[str, float] = {}
+    while time.time() < deadline and not rospy.is_shutdown():
+        ready, failures, ages = _streams_ready(
+            latest_wrist=latest_wrist,
+            latest_state=latest_state,
+            latest_action=latest_action,
+            max_image_age_s=args.max_image_age_s,
+            max_state_age_s=args.max_state_age_s,
+            max_action_age_s=args.max_action_age_s,
+        )
+        if ready:
+            break
+        time.sleep(0.02)
+    if not ready or fixed_gripper is None:
+        raise SystemExit(
+            "refusing to create episode; required streams are missing or stale: "
+            + ", ".join(failures or ["fixed gripper target unavailable"])
+        )
+
+    episode_id = f"piper_x_aruco_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    episode_dir = output_root / episode_id
+    (episode_dir / "images" / "wrist").mkdir(parents=True, exist_ok=True)
+    (episode_dir / "images" / "exterior").mkdir(parents=True, exist_ok=True)
+    (episode_dir / INCOMPLETE_MARKER).write_text("recording\n", encoding="utf-8")
 
     metadata = {
         "schema_version": "piper_x_aruco_raw_episode.v1",
@@ -152,6 +238,7 @@ def main() -> int:
         "camera_mount_id": profile.camera_mount_id,
         "image_preprocessing_id": profile.preprocessing_id,
         "fixed_gripper_target": fixed_gripper,
+        "fixed_gripper_target_source": fixed_gripper_source,
         "gripper_mode": profile.gripper_mode,
         "action_source": args.action_source,
         "action_source_topic": command_topic,
@@ -172,6 +259,8 @@ def main() -> int:
 
     frames = 0
     invalid = 0
+    clean_finalization = False
+    exit_code = 1
     try:
         next_tick = time.time()
         while not rospy.is_shutdown() and not stop["requested"]:
@@ -181,6 +270,17 @@ def main() -> int:
                 continue
             next_tick += period
             if latest_wrist.value is None or latest_state.value is None or latest_action.value is None:
+                invalid += 1
+                continue
+            ready, failures, ages = _streams_ready(
+                latest_wrist=latest_wrist,
+                latest_state=latest_state,
+                latest_action=latest_action,
+                max_image_age_s=args.max_image_age_s,
+                max_state_age_s=args.max_state_age_s,
+                max_action_age_s=args.max_action_age_s,
+            )
+            if not ready:
                 invalid += 1
                 continue
             source_times = [latest_wrist.stamp_s, latest_state.stamp_s, latest_action.stamp_s]
@@ -208,6 +308,7 @@ def main() -> int:
                     "action": latest_action.stamp_s,
                 },
                 "max_source_skew_s": max_skew,
+                "source_ages_s": ages,
                 "state": list(map(float, latest_state.value)),
                 "action": list(map(float, latest_action.value)),
                 "prompt": args.instruction,
@@ -218,6 +319,8 @@ def main() -> int:
             frame.update(obs_meta)
             append_frame(episode_dir, frame)
             frames += 1
+        clean_finalization = True
+        exit_code = 0 if frames > 0 else 3
     finally:
         summary = {
             "schema_version": "piper_x_aruco_episode_summary.v1",
@@ -225,14 +328,13 @@ def main() -> int:
             "episode_dir": str(episode_dir),
             "frames_recorded": frames,
             "invalid_sample_ticks": invalid,
+            "zero_valid_frames": frames == 0,
+            "clean_finalization": clean_finalization,
             "completed_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
-        write_json_atomic(episode_dir / "summary.json", summary)
-        incomplete = episode_dir / INCOMPLETE_MARKER
-        if incomplete.exists():
-            incomplete.unlink()
+        _finalize_episode(episode_dir, summary, clean=clean_finalization and frames > 0)
         print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

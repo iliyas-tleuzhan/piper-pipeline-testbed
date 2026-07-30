@@ -1,0 +1,171 @@
+===== JOINT STATES SINGLE =====
+header: 
+  seq: 740763
+  stamp: 
+    secs: 1785406448
+    nsecs: 181556463
+  frame_id: ''
+name: 
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  - gripper
+position: [-0.677664512, 0.6523707120000001, -1.410835832, 0.276993276, -0.75855234, 0.055594028000000004, 0.0007]
+velocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+effort: [-0.023625, 0.6236999999999999, -1.100925, -1.0312814399999999, 0.28178136, 0.019168799999999996, -0.1]
+---
+===== RELAYED JOINT STATES =====
+header: 
+  seq: 740694
+  stamp: 
+    secs: 1785406449
+    nsecs: 511398077
+  frame_id: ''
+name: 
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  - joint7
+  - joint8
+position: [-0.677664512, 0.6523707120000001, -1.410835832, 0.276993276, -0.75855234, 0.055594028000000004, 0.0007, -0.0007]
+velocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.0]
+effort: [-0.0212625, 0.62015625, -1.1021062499999998, -1.03415676, 0.28465668, 0.01821036, -0.095, -0.095]
+---
+===== CONTROLLER END POSE =====
+header: 
+  seq: 21
+  stamp: 
+    secs: 1785406450
+    nsecs: 861651659
+  frame_id: ''
+pose: 
+  position: 
+    x: 0.052509
+    y: -0.011135
+    z: 0.597965
+  orientation: 
+    x: -0.47818912712106154
+    y: 0.275554544909684
+    z: -0.6435594821881864
+    w: 0.5303169282311169
+---
+===== BASE TO GRIPPER =====
+At time 1785406452.216
+- Translation: [-0.051, 0.019, 0.617]
+- Rotation: in Quaternion [0.081, -0.049, -0.206, 0.974]
+            in RPY (radian) [0.180, -0.062, -0.423]
+            in RPY (degree) [10.286, -3.541, -24.225]
+At time 1785406452.897
+- Translation: [-0.051, 0.019, 0.617]
+- Rotation: in Quaternion [0.081, -0.049, -0.206, 0.974]
+            in RPY (radian) [0.180, -0.062, -0.423]
+            in RPY (degree) [10.286, -3.541, -24.225]
+At time 1785406453.891
+- Translation: [-0.051, 0.019, 0.617]
+- Rotation: in Quaternion [0.081, -0.049, -0.206, 0.974]
+            in RPY (radian) [0.180, -0.062, -0.423]
+            in RPY (degree) [10.286, -3.541, -24.225]
+===== CAMERA TO MARKER =====
+Failure at 1785406455.921615259
+Exception thrown:"aruco_marker_frame" passed to lookupTransform argument source_frame does not exist. 
+The current list of frames is:
+Frame base_link exists with parent dummy_link.
+Frame gripper_tcp exists with parent gripper_base.
+Frame gripper_base exists with parent link6.
+Frame link6 exists with parent link5.
+Frame wrist_camera_color_optical_frame exists with parent gripper_base.
+Frame link1 exists with parent base_link.
+Frame link2 exists with parent link1.
+Frame link3 exists with parent link2.
+Frame link4 exists with parent link3.
+Frame link5 exists with parent link4.
+Frame link7 exists with parent gripper_base.
+Frame link8 exists with parent gripper_base.
+
+Failure at 1785406455.921702232
+Exception thrown:"aruco_marker_frame" passed to lookupTransform argument source_frame does not exist. 
+The current list of frames is:
+Frame base_link exists with parent dummy_link.
+Frame gripper_tcp exists with parent gripper_base.
+Frame gripper_base exists with parent link6.
+Frame link6 exists with parent link5.
+Frame wrist_camera_color_optical_frame exists with parent gripper_base.
+Frame link1 exists with parent base_link.
+Frame link2 exists with parent link1.
+Frame link3 exists with parent link2.
+Frame link4 exists with parent link3.
+Frame link5 exists with parent link4.
+Frame link7 exists with parent gripper_base.
+Frame link8 exists with parent gripper_base.
+
+Failure at 1785406456.911480775
+Exception thrown:"aruco_marker_frame" passed to lookupTransform argument source_frame does not exist. 
+The current list of frames is:
+Frame base_link exists with parent dummy_link.
+Frame gripper_tcp exists with parent gripper_base.
+Frame gripper_base exists with parent link6.
+Frame link6 exists with parent link5.
+Frame wrist_camera_color_optical_frame exists with parent gripper_base.
+Frame link1 exists with parent base_link.
+Frame link2 exists with parent link1.
+Frame link3 exists with parent link2.
+Frame link4 exists with parent link3.
+Frame link5 exists with parent link4.
+Frame link7 exists with parent gripper_base.
+Frame link8 exists with parent gripper_base.
+
+===== BASE TO MARKER =====
+Failure at 1785406458.938185592
+Exception thrown:"aruco_marker_frame" passed to lookupTransform argument source_frame does not exist. 
+The current list of frames is:
+Frame base_link exists with parent dummy_link.
+Frame gripper_tcp exists with parent gripper_base.
+Frame gripper_base exists with parent link6.
+Frame link6 exists with parent link5.
+Frame wrist_camera_color_optical_frame exists with parent gripper_base.
+Frame link1 exists with parent base_link.
+Frame link2 exists with parent link1.
+Frame link3 exists with parent link2.
+Frame link4 exists with parent link3.
+Frame link5 exists with parent link4.
+Frame link7 exists with parent gripper_base.
+Frame link8 exists with parent gripper_base.
+
+Failure at 1785406458.938304167
+Exception thrown:"aruco_marker_frame" passed to lookupTransform argument source_frame does not exist. 
+The current list of frames is:
+Frame base_link exists with parent dummy_link.
+Frame gripper_tcp exists with parent gripper_base.
+Frame gripper_base exists with parent link6.
+Frame link6 exists with parent link5.
+Frame wrist_camera_color_optical_frame exists with parent gripper_base.
+Frame link1 exists with parent base_link.
+Frame link2 exists with parent link1.
+Frame link3 exists with parent link2.
+Frame link4 exists with parent link3.
+Frame link5 exists with parent link4.
+Frame link7 exists with parent gripper_base.
+Frame link8 exists with parent gripper_base.
+
+Failure at 1785406459.924542754
+Exception thrown:"aruco_marker_frame" passed to lookupTransform argument source_frame does not exist. 
+The current list of frames is:
+Frame base_link exists with parent dummy_link.
+Frame gripper_tcp exists with parent gripper_base.
+Frame gripper_base exists with parent link6.
+Frame link6 exists with parent link5.
+Frame wrist_camera_color_optical_frame exists with parent gripper_base.
+Frame link1 exists with parent base_link.
+Frame link2 exists with parent link1.
+Frame link3 exists with parent link2.
+Frame link4 exists with parent link3.
+Frame link5 exists with parent link4.
+Frame link7 exists with parent gripper_base.
+Frame link8 exists with parent gripper_base.
+

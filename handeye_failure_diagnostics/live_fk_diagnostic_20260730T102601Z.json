@@ -1,0 +1,56 @@
+{
+  "created_unix_s": 1785407165.9556346,
+  "ros": {
+    "base_to_gripper_base": {
+      "returncode": 124,
+      "stderr": "",
+      "stdout": "At time 1785407177.398\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407178.108\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407179.093\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407180.098\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\n"
+    },
+    "base_to_gripper_tcp": {
+      "returncode": 124,
+      "stderr": "",
+      "stdout": "At time 1785407182.028\n- Translation: [-0.209, 0.025, 0.838]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407182.718\n- Translation: [-0.209, 0.025, 0.838]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407183.728\n- Translation: [-0.209, 0.025, 0.838]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407184.723\n- Translation: [-0.209, 0.025, 0.838]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\n"
+    },
+    "base_to_link6": {
+      "returncode": 124,
+      "stderr": "",
+      "stdout": "At time 1785407172.783\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407173.503\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407174.493\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\nAt time 1785407175.498\n- Translation: [-0.172, 0.058, 0.712]\n- Rotation: in Quaternion [-0.174, -0.072, 0.928, -0.322]\n            in RPY (radian) [-0.023, 0.377, -2.479]\n            in RPY (degree) [-1.327, 21.606, -142.023]\n"
+    },
+    "end_pose": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "header: \n  seq: 81\n  stamp: \n    secs: 1785407170\n    nsecs: 887680530\n  frame_id: ''\npose: \n  position: \n    x: -0.050152\n    y: 0.04148\n    z: 0.673046\n  orientation: \n    x: 0.39347349753017913\n    y: 0.49208829803677867\n    z: 0.40002009062268695\n    w: 0.6655911964373116\n---\n"
+    },
+    "joint_states": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "header: \n  seq: 884548\n  stamp: \n    secs: 1785407169\n    nsecs:   3009796\n  frame_id: ''\nname: \n  - joint1\n  - joint2\n  - joint3\n  - joint4\n  - joint5\n  - joint6\n  - joint7\n  - joint8\nposition: [-0.499613604, 0.981783208, -2.5465274520000003, 1.4300591200000001, -0.35812532, 2.863833812, 0.0007, -0.0007]\nvelocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.0]\neffort: [0.02008125, 0.96508125, -0.23624999999999996, -1.34756664, 0.11788812, 0.16676855999999998, -0.095, -0.095]\n---\n"
+    },
+    "joint_states_single": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "header: \n  seq: 884537\n  stamp: \n    secs: 1785407167\n    nsecs:  93103885\n  frame_id: ''\nname: \n  - joint1\n  - joint2\n  - joint3\n  - joint4\n  - joint5\n  - joint6\n  - gripper\nposition: [-0.499613604, 0.981783208, -2.5465274520000003, 1.4300591200000001, -0.35812532, 2.863833812, 0.0007]\nvelocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]\neffort: [0.02480625, 0.9674437499999999, -0.24806249999999996, -1.32935628, 0.11405436, 0.16772700000000001, -0.095]\n---\n"
+    },
+    "robot_description_hash": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "c9ce0b71e1f5684d5c95f8b9895495bfac3c9e48e6484f63959cc9a44502941a  -\n"
+    },
+    "urdf_path_and_hash": {
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "/root/ABot-Claw/robot_layer/arm_piper/agent_server/robot_driver_ros/src/piper_ros/src/piper_description/urdf/piper_description.urdf\n9355d8a35d3f36691266163c06618b23bb7305c92b918c8eedeac31cb3652033  /root/ABot-Claw/robot_layer/arm_piper/agent_server/robot_driver_ros/src/piper_ros/src/piper_description/urdf/piper_description.urdf\n"
+    }
+  },
+  "safety": {
+    "motion_commands_published": false,
+    "notes": "This helper reads ROS topics, TF, firmware query, and SDK FK only.",
+    "read_only": true,
+    "robot_enable_command_sent": false
+  },
+  "sdk": {
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "{\n  \"EnableFkCal_signature\": \"(self)\",\n  \"GetArmEndPoseMsgs_signature\": \"(self)\",\n  \"GetFK_signature\": \"(self, mode: typing_extensions.Literal['feedback', 'control'] = 'feedback')\",\n  \"GetPiperFirmwareVersion_signature\": \"(self)\",\n  \"SearchPiperFirmwareVersion_signature\": \"(self)\",\n  \"constructor_signature\": \"(can_name: str = 'can0', judge_flag=True, can_auto_init=True, dh_is_offset: int = 1, start_sdk_joint_limit: bool = False, start_sdk_gripper_limit: bool = False, logger_level: piper_sdk.utils.logger_mag.LogLevel = <LogLevel.WARNING: 30>, log_to_file: bool = False, log_file_path=None)\",\n  \"created\": true,\n  \"enable_fk_cal_called\": true,\n  \"firmware\": -1199,\n  \"firmware_before_search\": -1199,\n  \"firmware_search_called\": true,\n  \"sdk_end_pose\": \"time stamp:0\\nHz:0\\nArmMsgFeedBackEndPose:\\n X_axis : 0\\n Y_axis : 0\\n Z_axis : 0\\n RX_axis : 0\\n RY_axis : 0\\n RZ_axis : 0\\n\",\n  \"sdk_fk_control\": [\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ]\n  ],\n  \"sdk_fk_feedback\": [\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ],\n    [\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0,\n      0.0\n    ]\n  ]\n}\n"
+  }
+}

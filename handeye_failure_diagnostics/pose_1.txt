@@ -1,0 +1,105 @@
+===== JOINT STATES SINGLE =====
+header: 
+  seq: 731000
+  stamp: 
+    secs: 1785406399
+    nsecs: 366403579
+  frame_id: ''
+name: 
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  - gripper
+position: [0.232668072, 0.5344841600000001, -1.410975384, 0.6124588400000001, 0.11507806800000002, 0.030544444, 0.0007]
+velocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+effort: [-0.10631249999999999, 0.7902562499999999, -1.0395, -1.22776164, -0.02587788, 0.11022059999999999, -0.097]
+---
+===== RELAYED JOINT STATES =====
+header: 
+  seq: 730931
+  stamp: 
+    secs: 1785406400
+    nsecs: 691469669
+  frame_id: ''
+name: 
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  - joint7
+  - joint8
+position: [0.232668072, 0.5344841600000001, -1.410975384, 0.6124588400000001, 0.11507806800000002, 0.030544444, 0.0007, -0.0007]
+velocity: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -0.0]
+effort: [-0.10631249999999999, 0.79498125, -1.04776875, -1.2315954, -0.024919439999999998, 0.10159464, -0.094, -0.094]
+---
+===== CONTROLLER END POSE =====
+header: 
+  seq: 1
+  stamp: 
+    secs: 1785406401
+    nsecs: 996379613
+  frame_id: ''
+pose: 
+  position: 
+    x: 0.017566
+    y: 1e-06
+    z: 0.574498
+  orientation: 
+    x: -0.41320221400591656
+    y: 0.3979519995931341
+    z: -0.5238734610222567
+    w: 0.6296465144801462
+---
+===== BASE TO GRIPPER =====
+At time 1785406403.296
+- Translation: [-0.040, -0.003, 0.588]
+- Rotation: in Quaternion [0.039, 0.343, 0.407, 0.846]
+            in RPY (radian) [0.425, 0.580, 1.025]
+            in RPY (degree) [24.342, 33.212, 58.739]
+At time 1785406404.012
+- Translation: [-0.040, -0.003, 0.588]
+- Rotation: in Quaternion [0.039, 0.343, 0.407, 0.846]
+            in RPY (radian) [0.425, 0.580, 1.025]
+            in RPY (degree) [24.342, 33.212, 58.739]
+At time 1785406405.006
+- Translation: [-0.040, -0.003, 0.588]
+- Rotation: in Quaternion [0.039, 0.343, 0.407, 0.846]
+            in RPY (radian) [0.425, 0.580, 1.025]
+            in RPY (degree) [24.342, 33.212, 58.739]
+===== CAMERA TO MARKER =====
+At time 1785406406.344
+- Translation: [0.014, 0.027, 0.336]
+- Rotation: in Quaternion [-0.637, 0.746, 0.013, -0.195]
+            in RPY (radian) [2.859, -0.278, -1.688]
+            in RPY (degree) [163.800, -15.930, -96.706]
+At time 1785406406.947
+- Translation: [0.014, 0.027, 0.336]
+- Rotation: in Quaternion [-0.637, 0.746, 0.013, -0.195]
+            in RPY (radian) [2.859, -0.278, -1.688]
+            in RPY (degree) [163.800, -15.930, -96.706]
+At time 1785406407.949
+- Translation: [0.014, 0.027, 0.336]
+- Rotation: in Quaternion [-0.637, 0.746, 0.013, -0.195]
+            in RPY (radian) [2.859, -0.278, -1.688]
+            in RPY (degree) [163.800, -15.930, -96.706]
+===== BASE TO MARKER =====
+At time 1785406409.351
+- Translation: [0.017, 0.032, 0.756]
+- Rotation: in Quaternion [0.889, -0.213, -0.083, 0.398]
+            in RPY (radian) [2.305, -0.022, -0.460]
+            in RPY (degree) [132.055, -1.262, -26.382]
+At time 1785406409.951
+- Translation: [0.017, 0.032, 0.756]
+- Rotation: in Quaternion [0.889, -0.213, -0.083, 0.398]
+            in RPY (radian) [2.305, -0.022, -0.460]
+            in RPY (degree) [132.055, -1.262, -26.382]
+At time 1785406410.950
+- Translation: [0.017, 0.032, 0.756]
+- Rotation: in Quaternion [0.889, -0.213, -0.083, 0.398]
+            in RPY (radian) [2.305, -0.022, -0.460]
+            in RPY (degree) [132.055, -1.262, -26.382]

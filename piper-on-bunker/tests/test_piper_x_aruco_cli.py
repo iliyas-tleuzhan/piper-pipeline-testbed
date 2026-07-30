@@ -19,6 +19,7 @@ SCRIPTS = [
 SHELL_SCRIPTS = [
     "tools/check_piper_x_d435i_aruco_image.sh",
     "tools/open_piper_x_d435i_aruco_debug_view.sh",
+    "tools/snapshot_piper_x_d435i_handeye_state.sh",
     "tools/start_piper_x_d435i_handeye_calibration.sh",
 ]
 

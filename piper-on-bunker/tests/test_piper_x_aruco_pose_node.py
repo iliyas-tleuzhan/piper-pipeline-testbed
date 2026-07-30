@@ -41,6 +41,19 @@ def test_detects_dict_4x4_50_marker_id_6_with_pose():
     assert result.detected_marker_ids == [6]
 
 
+def test_detects_dict_aruco_original_marker_id_6_with_solvepnp_fallback():
+    result = detect_piper_x_aruco_pose(
+        _marker_image(6, "DICT_ARUCO_ORIGINAL"),
+        _camera_matrix(),
+        [0.0, 0.0, 0.0, 0.0, 0.0],
+        PiperXArucoPoseConfig(dictionary="DICT_ARUCO_ORIGINAL", marker_id=6, marker_size_m=0.100),
+    )
+    assert result.visible is True
+    assert result.tvec is not None
+    assert result.quaternion_xyzw is not None
+    assert result.detected_marker_ids == [6]
+
+
 def test_wrong_marker_id_is_not_publishable():
     result = detect_piper_x_aruco_pose(
         _marker_image(6),

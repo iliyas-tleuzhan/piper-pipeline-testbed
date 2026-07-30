@@ -88,14 +88,39 @@ def detect_piper_x_aruco_pose(
 
     index = flat_ids.index(config.marker_id)
     marker_corners = np.asarray(corners[index], dtype=np.float64).reshape(4, 2)
-    rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-        [marker_corners.astype(np.float32)],
-        float(config.marker_size_m),
-        np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3),
-        np.asarray(dist_coeffs, dtype=np.float64).reshape(-1),
-    )
-    rvec = np.asarray(rvecs[0][0], dtype=float)
-    tvec = np.asarray(tvecs[0][0], dtype=float)
+    camera_matrix_arr = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
+    dist_coeffs_arr = np.asarray(dist_coeffs, dtype=np.float64).reshape(-1)
+    if hasattr(cv2.aruco, "estimatePoseSingleMarkers"):
+        rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
+            [marker_corners.astype(np.float32)],
+            float(config.marker_size_m),
+            camera_matrix_arr,
+            dist_coeffs_arr,
+        )
+        rvec = np.asarray(rvecs[0][0], dtype=float)
+        tvec = np.asarray(tvecs[0][0], dtype=float)
+    else:
+        half = float(config.marker_size_m) / 2.0
+        object_points = np.asarray(
+            [
+                [-half, half, 0.0],
+                [half, half, 0.0],
+                [half, -half, 0.0],
+                [-half, -half, 0.0],
+            ],
+            dtype=np.float64,
+        )
+        ok, rvec_out, tvec_out = cv2.solvePnP(
+            object_points,
+            marker_corners.astype(np.float64),
+            camera_matrix_arr,
+            dist_coeffs_arr,
+            flags=cv2.SOLVEPNP_IPPE_SQUARE if hasattr(cv2, "SOLVEPNP_IPPE_SQUARE") else cv2.SOLVEPNP_ITERATIVE,
+        )
+        if not ok:
+            return PiperXArucoPoseResult(False, "solvePnP failed", detected_marker_ids=flat_ids)
+        rvec = np.asarray(rvec_out, dtype=float).reshape(3)
+        tvec = np.asarray(tvec_out, dtype=float).reshape(3)
     quat = _rvec_to_quaternion_xyzw(rvec)
     center = marker_corners.mean(axis=0)
     return PiperXArucoPoseResult(

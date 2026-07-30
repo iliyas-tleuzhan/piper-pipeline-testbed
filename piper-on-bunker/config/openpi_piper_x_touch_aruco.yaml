@@ -1,0 +1,118 @@
+schema_version: openpi_robot_profile.v1
+robot_profile_id: agilex_piper_x_single_arm_wrist_aruco_v1
+robot_model: agilex_piper_x
+active_arms: 1
+base_mode: fixed
+
+task_id: touch_aruco_marker_vertical_v1
+task_prompt_default: "Touch the center of the ArUco marker and retract."
+dataset_robot_type: piper_x_single_arm
+normalization_asset_id: piper_x_touch_aruco_v1
+openpi_commit: 15a9616a00943ada6c20a0f158e3adb39df2ccac
+base_checkpoint_for_future_training: gs://openpi-assets/checkpoints/pi05_base
+
+action_semantics: absolute_piper_x_joint_targets
+joint_order:
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  - gripper
+state_units:
+  joint1: rad
+  joint2: rad
+  joint3: rad
+  joint4: rad
+  joint5: rad
+  joint6: rad
+  gripper: hardware_feedback_units_unresolved
+action_units:
+  joint1: rad
+  joint2: rad
+  joint3: rad
+  joint4: rad
+  joint5: rad
+  joint6: rad
+  gripper: fixed_hold_target_units_unresolved
+control_frequency_hz: 20.0
+
+joint_limits:
+  status: unresolved
+  source: null
+  physical_execution_allowed: false
+  note: "Do not borrow normal PiPER limits for PiPER-X. Populate only after hardware/SDK verification."
+gripper_limits:
+  status: unresolved
+  source: null
+  physical_execution_allowed: false
+
+camera:
+  schema:
+    observation/wrist_image: real_wrist_camera
+    observation/exterior_image: zero_image_placeholder
+  wrist_image_topic: /piper_x/wrist_camera/image_raw
+  camera_info_topic: /piper_x/wrist_camera/camera_info
+  topic_verification: unresolved
+  mount_id: piper_x_wrist_mount_v1
+  mount_version: piper_x_wrist_mount_v1
+  rotation: unresolved
+  require_wrist_image: true
+  use_external_camera: false
+image_preprocessing:
+  id: openpi_resize_with_pad_rgb_224_v1
+  output_height: 224
+  output_width: 224
+  color_order: RGB
+  padding_value: 0
+
+marker:
+  dictionary: DICT_4X4_50
+  id: 6
+  side_length_m: null
+  side_length_required_for_pose: true
+  expected_surface_type: vertical
+  role: diagnostic_metadata_only
+
+gripper:
+  mode: fixed_hold
+  fixed_target_source: startup_state
+  fixed_target_value: null
+  fixed_target_tolerance: 0.000001
+  policy_trains_gripper_control: false
+
+collection:
+  fps: 20.0
+  max_timestamp_skew_s: 0.05
+  command_source_required: true
+  verified_action_sources:
+    ros_command_topic:
+      approved_for_collection: true
+      note: "Use only when topic is proven to carry exact converted absolute slave/follower targets."
+    socketcan_command_frames:
+      approved_for_collection: false
+      note: "PiPER-X CAN command decoding is unresolved."
+    pyagxarm_leader_feedback:
+      approved_for_collection: false
+      note: "Requires verified conversion to exact slave absolute targets."
+max_timestamp_skew_s: 0.05
+
+feedback:
+  state_topic: /joint_states_single
+  state_source_verification: unresolved_for_piper_x
+command_labels:
+  default_source: ros_command_topic
+  ros_command_topic: /piper_x_joint_commands
+  source_verification: unresolved_until_preflight
+
+output_dataset_root: piper-on-bunker/data/local/openpi_piper_x_aruco_episodes
+required_hardware_manifest: piper-on-bunker/config/manifests/piper_x_hardware.local.yaml
+required_camera_manifest: piper-on-bunker/config/manifests/piper_x_wrist_camera.local.yaml
+required_camera_mount_manifest: piper-on-bunker/config/manifests/piper_x_wrist_mount.local.yaml
+required_target_manifest: piper-on-bunker/config/manifests/aruco_vertical_target.local.yaml
+dataset_manifest_template: piper-on-bunker/config/manifests/piper_x_dataset.template.yaml
+
+physical_execution:
+  allowed: false
+  reason: "No PiPER-X trained checkpoint, limits, gripper units, or hardware verification yet."

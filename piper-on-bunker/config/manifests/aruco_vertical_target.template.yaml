@@ -1,0 +1,12 @@
+schema_version: aruco_vertical_target_manifest.v1
+task_id: touch_aruco_marker_vertical_v1
+dictionary: DICT_4X4_50
+marker_id: 6
+marker_side_length_m: null
+target_surface_orientation: vertical
+mounting:
+  rigid: true
+  flat: true
+  height_from_table_m: null
+safe_pressing_tip: null
+notes: null

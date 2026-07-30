@@ -1,0 +1,15 @@
+schema_version: piper_x_wrist_camera_manifest.v1
+robot_profile_id: agilex_piper_x_single_arm_wrist_aruco_v1
+camera_model: null
+camera_serial: null
+image_topic: /piper_x/wrist_camera/image_raw
+camera_info_topic: /piper_x/wrist_camera/camera_info
+encoding: rgb8
+native_width: null
+native_height: null
+calibration_id: null
+calibration_hash: null
+image_preprocessing_id: openpi_resize_with_pad_rgb_224_v1
+camera_rotation: unresolved
+collection_fps: 20.0
+notes: null

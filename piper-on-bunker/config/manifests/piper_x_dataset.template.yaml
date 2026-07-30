@@ -1,0 +1,15 @@
+schema_version: piper_x_dataset_manifest.v1
+robot_profile_id: agilex_piper_x_single_arm_wrist_aruco_v1
+task_id: touch_aruco_marker_vertical_v1
+dataset_id: null
+dataset_revision: null
+collection_fps: 20.0
+episodes_root: piper-on-bunker/data/local/openpi_piper_x_aruco_episodes
+hardware_manifest_hash: null
+camera_manifest_hash: null
+camera_mount_manifest_hash: null
+target_manifest_hash: null
+normalization_asset_id: piper_x_touch_aruco_v1
+image_preprocessing_id: openpi_resize_with_pad_rgb_224_v1
+split_seed: null
+notes: null

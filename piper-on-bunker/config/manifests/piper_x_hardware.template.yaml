@@ -1,0 +1,33 @@
+schema_version: piper_x_hardware_manifest.v1
+robot_profile_id: agilex_piper_x_single_arm_wrist_aruco_v1
+robot_model: agilex_piper_x
+arm_serial: null
+firmware_version: null
+driver_or_sdk:
+  name: null
+  repository: null
+  commit: null
+  pyagxarm_commit_expected_if_used: cc498c00af0bcb9e297943e94f4792c0e3ee5b2c
+joint_order:
+  - joint1
+  - joint2
+  - joint3
+  - joint4
+  - joint5
+  - joint6
+  - gripper
+zero_convention:
+  status: unresolved
+  description: null
+verified_limits:
+  status: unresolved
+  source: null
+  joint_limits_rad: null
+  velocity_limits_rad_s: null
+  acceleration_limits_rad_s2: null
+gripper_or_tool:
+  mode: fixed_hold
+  configuration: null
+  units: unresolved
+can_interface: can0
+notes: null

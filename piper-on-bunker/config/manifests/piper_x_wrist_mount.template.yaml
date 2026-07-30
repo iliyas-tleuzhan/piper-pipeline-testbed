@@ -1,0 +1,10 @@
+schema_version: piper_x_wrist_mount_manifest.v1
+robot_profile_id: agilex_piper_x_single_arm_wrist_aruco_v1
+mount_id: piper_x_wrist_mount_v1
+mount_revision: null
+rigid_to_active_wrist: true
+mounted_link: null
+extrinsic_calibration:
+  status: unresolved
+  transform: null
+mechanical_notes: null

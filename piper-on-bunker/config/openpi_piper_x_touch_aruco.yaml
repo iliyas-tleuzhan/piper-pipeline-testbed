@@ -70,7 +70,7 @@ image_preprocessing:
 marker:
   dictionary: DICT_4X4_50
   id: 6
-  side_length_m: null
+  side_length_m: 0.100
   side_length_required_for_pose: true
   expected_surface_type: vertical
   role: diagnostic_metadata_only

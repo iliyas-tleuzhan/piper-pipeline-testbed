@@ -12,6 +12,7 @@ SCRIPTS = [
     "piper-on-bunker/scripts/label_openpi_episode_outcome.py",
     "piper-on-bunker/scripts/run_openpi_piper_x_aruco_live_shadow.py",
     "piper-on-bunker/scripts/make_openpi_piper_x_aruco_smoke_checkpoint_metadata.py",
+    "piper-on-bunker/scripts/piper_x_aruco_pose_node.py",
 ]
 
 

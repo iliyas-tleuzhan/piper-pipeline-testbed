@@ -8,6 +8,12 @@ MARKER_ID="${MARKER_ID:-6}"
 MARKER_SIZE_M="${MARKER_SIZE_M:-0.100}"
 MARKER_DICTIONARY="${MARKER_DICTIONARY:-DICT_ARUCO_ORIGINAL}"
 CAN_INTERFACE="${CAN_INTERFACE:-can0}"
+IMAGE_GEOMETRY_MODE="${IMAGE_GEOMETRY_MODE:-rectified}"
+PHYSICAL_MODEL_ID="${PHYSICAL_MODEL_ID:-}"
+FIRMWARE_VERSION="${FIRMWARE_VERSION:-}"
+ROBOT_URDF_PATH="${ROBOT_URDF_PATH:-}"
+ROBOT_URDF_SHA256="${ROBOT_URDF_SHA256:-}"
+PIPER_X_FK_VERIFIED="${PIPER_X_FK_VERIFIED:-false}"
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
   echo "ERROR: container $CONTAINER does not exist" >&2
@@ -16,6 +22,21 @@ fi
 if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER")" != "true" ]; then
   docker start "$CONTAINER" >/dev/null
 fi
+
+selection_json="$(PYTHONPATH="piper-on-bunker/src:${PYTHONPATH:-}" \
+  python3 piper-on-bunker/scripts/select_piper_x_calibration_urdf.py \
+    --physical-model-id "$PHYSICAL_MODEL_ID" \
+    --firmware-version "$FIRMWARE_VERSION" \
+    --robot-urdf-path "$ROBOT_URDF_PATH" \
+    --expected-sha256 "$ROBOT_URDF_SHA256" \
+    --fk-verified "$PIPER_X_FK_VERIFIED" 2>&1)" || {
+  echo "ERROR: refusing to start PiPER-X hand-eye calibration with unverified FK/URDF." >&2
+  echo "$selection_json" >&2
+  echo "Run ./tools/check_piper_x_fk_consistency.sh at multiple stopped poses and verify the correct PiPER-X model before recalibrating." >&2
+  exit 2
+}
+selected_urdf_path="$(printf '%s\n' "$selection_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_urdf_path"])')"
+selected_urdf_sha256="$(printf '%s\n' "$selection_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["selected_urdf_sha256"])')"
 
 docker exec -i "$CONTAINER" bash -lc '
 source /opt/ros/noetic/setup.bash >/dev/null 2>&1 || true
@@ -100,6 +121,11 @@ STAGE="/tmp/piper_x_handeye"
 docker exec -i "$CONTAINER" bash -lc "rm -rf '$STAGE'; mkdir -p '$STAGE/src/piper_on_bunker/perception' '$STAGE/scripts'; touch '$STAGE/src/piper_on_bunker/__init__.py' '$STAGE/src/piper_on_bunker/perception/__init__.py'"
 docker cp "piper-on-bunker/src/piper_on_bunker/perception/piper_x_aruco_pose.py" "$CONTAINER:$STAGE/src/piper_on_bunker/perception/piper_x_aruco_pose.py"
 docker cp "piper-on-bunker/scripts/piper_x_aruco_pose_node.py" "$CONTAINER:$STAGE/scripts/piper_x_aruco_pose_node.py"
+if [[ "$selected_urdf_path" == /root/* ]]; then
+  docker exec -i "$CONTAINER" bash -lc "cp '$selected_urdf_path' '$STAGE/robot_description.urdf'"
+else
+  docker cp "$selected_urdf_path" "$CONTAINER:$STAGE/robot_description.urdf"
+fi
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 tmux new-session -d -s "$SESSION" -n roscore
@@ -119,10 +145,10 @@ sleep 2
 send_window piper_driver_readonly "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix ip link set $CAN_INTERFACE down || true; ip link set $CAN_INTERFACE type can bitrate 1000000 || true; ip link set $CAN_INTERFACE txqueuelen 1000 || true; ip link set $CAN_INTERFACE up || true; roslaunch piper start_single_piper.launch can_port:=$CAN_INTERFACE auto_enable:=false'"
 sleep 2
 send_window joint_relay "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix cd /root/ABot-Claw/robot_layer/arm_piper/agent_server; python3 piper_joint_state_relay.py'"
-send_window robot_state_pub "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix while ! timeout 2 rostopic echo -n 1 /joint_states >/dev/null 2>&1; do echo waiting for /joint_states; sleep 1; done; rosparam set --textfile=\$(rospack find piper_description)/urdf/piper_description.urdf /robot_description; rosrun robot_state_publisher robot_state_publisher __name:=robot_state_publisher'"
+send_window robot_state_pub "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix while ! timeout 2 rostopic echo -n 1 /joint_states >/dev/null 2>&1; do echo waiting for /joint_states; sleep 1; done; rosparam set /piper_x_handeye_model/physical_model_id $PHYSICAL_MODEL_ID; rosparam set /piper_x_handeye_model/firmware_version $FIRMWARE_VERSION; rosparam set /piper_x_handeye_model/selected_urdf_path $selected_urdf_path; rosparam set /piper_x_handeye_model/selected_urdf_sha256 $selected_urdf_sha256; rosparam set /piper_x_handeye_model/fk_verified true; rosparam set --textfile=$STAGE/robot_description.urdf /robot_description; rosrun robot_state_publisher robot_state_publisher __name:=robot_state_publisher'"
 send_window d435i_wrist "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix cd /root/ABot-Claw/robot_layer/arm_piper/agent_server; python3 realsense_d555_py_publisher.py --camera wrist_camera --serial $CAMERA_SERIAL --width 640 --height 480 --fps 15'"
 send_window image_rectify "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_raw >/dev/null 2>&1; do echo waiting for wrist raw image; sleep 1; done; rosrun image_proc image_proc __name:=image_proc __ns:=/wrist_camera/color'"
-send_window aruco "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix export PYTHONPATH=$STAGE/src:\${PYTHONPATH:-}; while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_rect_color >/dev/null 2>&1; do echo waiting for rectified wrist image; sleep 1; done; python3 $STAGE/scripts/piper_x_aruco_pose_node.py _image_topic:=/wrist_camera/color/image_rect_color _camera_info_topic:=/wrist_camera/color/camera_info _pose_topic:=/aruco_simple/pose _debug_image_topic:=/aruco_simple/debug_image _dictionary:=$MARKER_DICTIONARY _marker_id:=$MARKER_ID _marker_size_m:=$MARKER_SIZE_M _camera_frame:=wrist_camera_color_optical_frame _marker_frame:=aruco_marker_frame'"
+send_window aruco "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix export PYTHONPATH=$STAGE/src:\${PYTHONPATH:-}; while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_rect_color >/dev/null 2>&1; do echo waiting for rectified wrist image; sleep 1; done; python3 $STAGE/scripts/piper_x_aruco_pose_node.py _image_topic:=/wrist_camera/color/image_rect_color _camera_info_topic:=/wrist_camera/color/camera_info _image_geometry_mode:=$IMAGE_GEOMETRY_MODE _pose_topic:=/aruco_simple/pose _debug_image_topic:=/aruco_simple/debug_image _dictionary:=$MARKER_DICTIONARY _marker_id:=$MARKER_ID _marker_size_m:=$MARKER_SIZE_M _camera_frame:=wrist_camera_color_optical_frame _marker_frame:=aruco_marker_frame'"
 send_window handeye_backend "docker exec -i $CONTAINER bash -lc '$docker_ros_prefix export PYTHONPATH=/usr/lib/python3/dist-packages:\${PYTHONPATH:-}; roslaunch easy_handeye calibrate.launch eye_on_hand:=true namespace_prefix:=piper_x_d435i_wrist freehand_robot_movement:=true robot_base_frame:=base_link robot_effector_frame:=gripper_base tracking_base_frame:=wrist_camera_color_optical_frame tracking_marker_frame:=aruco_marker_frame start_rviz:=false start_sampling_gui:=false'"
 
 tmux select-window -t "$SESSION:handeye_backend"
@@ -133,4 +159,7 @@ echo "Started detached tmux session: $SESSION"
 echo "Marker dictionary: $MARKER_DICTIONARY"
 echo "Marker ID: $MARKER_ID"
 echo "Marker size: $MARKER_SIZE_M m"
+echo "Image geometry mode: $IMAGE_GEOMETRY_MODE"
+echo "Selected URDF: $selected_urdf_path"
+echo "Selected URDF SHA256: $selected_urdf_sha256"
 echo "No robot motion was commanded. PiPER driver requested auto_enable:=false."

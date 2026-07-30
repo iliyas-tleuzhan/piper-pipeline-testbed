@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import math
 import re
 from pathlib import Path
@@ -31,6 +32,7 @@ class CapturedPose:
     relayed_joint_states: list[float]
     controller_end_pose: PoseTransform
     base_to_gripper: PoseTransform
+    endpoint_transforms: dict[str, PoseTransform]
     base_to_marker: PoseTransform | None
 
 
@@ -47,28 +49,86 @@ def parse_diagnostic_file(path: str | Path) -> CapturedPose:
     sections = _split_sections(text)
     joint_states_single = _parse_position_list(_require_section(sections, "JOINT STATES SINGLE"))
     relayed_joint_states = _parse_position_list(_require_section(sections, "RELAYED JOINT STATES"))
+    endpoint_transforms = {
+        "gripper_base": _parse_tf_section(_require_section(sections, "BASE TO GRIPPER")),
+    }
+    optional_sections = {
+        "link6": "BASE TO LINK6",
+        "gripper_tcp": "BASE TO GRIPPER TCP",
+    }
+    for frame_name, section_name in optional_sections.items():
+        if section_name in sections:
+            endpoint_transforms[frame_name] = _parse_tf_section(sections[section_name])
     return CapturedPose(
         path=str(path),
         joint_states_single=joint_states_single,
         relayed_joint_states=relayed_joint_states,
         controller_end_pose=_parse_controller_end_pose(_require_section(sections, "CONTROLLER END POSE")),
-        base_to_gripper=_parse_tf_section(_require_section(sections, "BASE TO GRIPPER")),
+        base_to_gripper=endpoint_transforms["gripper_base"],
+        endpoint_transforms=endpoint_transforms,
         base_to_marker=_parse_optional_tf_section(sections.get("BASE TO MARKER", "")),
+    )
+
+
+def parse_diagnostic_path(path: str | Path) -> CapturedPose:
+    path_obj = Path(path)
+    if path_obj.suffix.lower() == ".json":
+        return parse_capture_json_file(path_obj)
+    return parse_diagnostic_file(path_obj)
+
+
+def parse_capture_json_file(path: str | Path) -> CapturedPose:
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    ros = data.get("ros", {})
+    endpoint_transforms = {}
+    endpoint_keys = {
+        "link6": "base_to_link6",
+        "gripper_base": "base_to_gripper_base",
+        "gripper_tcp": "base_to_gripper_tcp",
+    }
+    for frame_name, key in endpoint_keys.items():
+        stdout = ros.get(key, {}).get("stdout", "")
+        try:
+            endpoint_transforms[frame_name] = _parse_tf_section(stdout)
+        except ValueError:
+            pass
+    if "gripper_base" not in endpoint_transforms:
+        raise ValueError("missing gripper_base TF in JSON diagnostic")
+    return CapturedPose(
+        path=str(path),
+        joint_states_single=_parse_position_list(ros.get("joint_states_single", {}).get("stdout", "")),
+        relayed_joint_states=_parse_position_list(ros.get("joint_states", {}).get("stdout", "")),
+        controller_end_pose=_parse_controller_end_pose(ros.get("end_pose", {}).get("stdout", "")),
+        base_to_gripper=endpoint_transforms["gripper_base"],
+        endpoint_transforms=endpoint_transforms,
+        base_to_marker=None,
     )
 
 
 def analyze_captures(captures: Iterable[CapturedPose], residual_warn_translation_m: float = 0.02, residual_warn_angle_deg: float = 5.0) -> dict:
     poses = list(captures)
     per_pose = []
-    deltas = []
+    candidate_deltas: dict[str, list[np.ndarray]] = {}
+    candidate_errors: dict[str, list[tuple[float, float]]] = {}
     marker_positions = []
     for pose in poses:
         controller = pose.controller_end_pose.matrix()
-        gripper = pose.base_to_gripper.matrix()
-        delta = np.linalg.inv(gripper) @ controller
-        deltas.append(delta)
-        translation_error = np.linalg.norm(pose.controller_end_pose.translation - pose.base_to_gripper.translation)
-        angular_error = _angular_distance_deg(pose.controller_end_pose.quaternion_xyzw, pose.base_to_gripper.quaternion_xyzw)
+        candidate_report = {}
+        for frame_name, endpoint in pose.endpoint_transforms.items():
+            endpoint_matrix = endpoint.matrix()
+            delta = np.linalg.inv(endpoint_matrix) @ controller
+            candidate_deltas.setdefault(frame_name, []).append(delta)
+            translation_error = float(np.linalg.norm(pose.controller_end_pose.translation - endpoint.translation))
+            angular_error = _angular_distance_deg(pose.controller_end_pose.quaternion_xyzw, endpoint.quaternion_xyzw)
+            candidate_errors.setdefault(frame_name, []).append((translation_error, angular_error))
+            candidate_report[frame_name] = {
+                "translation_error_m": translation_error,
+                "angular_error_deg": angular_error,
+                "urdf_position_m": endpoint.translation.tolist(),
+                "endpoint_to_controller_delta_translation_m": delta[:3, 3].tolist(),
+                "endpoint_to_controller_delta_quaternion_xyzw": Rotation.from_matrix(delta[:3, :3]).as_quat().tolist(),
+            }
+        gripper_error = candidate_report["gripper_base"]
         joint_copy_exact = np.allclose(pose.joint_states_single[:6], pose.relayed_joint_states[:6], atol=0.0, rtol=0.0)
         if pose.base_to_marker is not None:
             marker_positions.append(pose.base_to_marker.translation)
@@ -76,17 +136,41 @@ def analyze_captures(captures: Iterable[CapturedPose], residual_warn_translation
             {
                 "path": pose.path,
                 "joint_copy_exact_first_6": bool(joint_copy_exact),
-                "controller_vs_urdf_gripper_translation_error_m": float(translation_error),
-                "controller_vs_urdf_gripper_angular_error_deg": float(angular_error),
+                "controller_vs_urdf_gripper_translation_error_m": gripper_error["translation_error_m"],
+                "controller_vs_urdf_gripper_angular_error_deg": gripper_error["angular_error_deg"],
                 "controller_position_m": pose.controller_end_pose.translation.tolist(),
                 "urdf_base_to_gripper_position_m": pose.base_to_gripper.translation.tolist(),
                 "base_to_marker_position_m": None if pose.base_to_marker is None else pose.base_to_marker.translation.tolist(),
-                "gripper_to_controller_delta_translation_m": delta[:3, 3].tolist(),
-                "gripper_to_controller_delta_quaternion_xyzw": Rotation.from_matrix(delta[:3, :3]).as_quat().tolist(),
+                "gripper_to_controller_delta_translation_m": gripper_error["endpoint_to_controller_delta_translation_m"],
+                "gripper_to_controller_delta_quaternion_xyzw": gripper_error["endpoint_to_controller_delta_quaternion_xyzw"],
+                "candidate_endpoint_mappings": candidate_report,
             }
         )
 
-    residuals = _constant_transform_residuals(deltas)
+    candidate_mapping_summary = {}
+    for frame_name, deltas in sorted(candidate_deltas.items()):
+        residuals = _constant_transform_residuals(deltas)
+        errors = candidate_errors[frame_name]
+        candidate_mapping_summary[frame_name] = {
+            "pose_count": len(deltas),
+            "mean_translation_error_m": float(np.mean([item[0] for item in errors])),
+            "max_translation_error_m": float(np.max([item[0] for item in errors])),
+            "mean_angular_error_deg": float(np.mean([item[1] for item in errors])),
+            "max_angular_error_deg": float(np.max([item[1] for item in errors])),
+            "constant_endpoint_to_controller_transform": {
+                "verified": bool(
+                    residuals["max_translation_residual_m"] <= residual_warn_translation_m
+                    and residuals["max_angular_residual_deg"] <= residual_warn_angle_deg
+                ),
+                "max_translation_residual_m": residuals["max_translation_residual_m"],
+                "max_angular_residual_deg": residuals["max_angular_residual_deg"],
+                "mean_delta_translation_m": residuals["mean_translation"].tolist(),
+                "mean_delta_quaternion_xyzw": residuals["mean_quaternion_xyzw"].tolist(),
+                "translation_threshold_m": residual_warn_translation_m,
+                "angular_threshold_deg": residual_warn_angle_deg,
+            },
+        }
+    residuals = candidate_mapping_summary["gripper_base"]["constant_endpoint_to_controller_transform"]
     marker_displacement = None
     if len(marker_positions) >= 2:
         marker_displacement = float(max(np.linalg.norm(a - b) for a in marker_positions for b in marker_positions))
@@ -102,11 +186,12 @@ def analyze_captures(captures: Iterable[CapturedPose], residual_warn_translation
             "verified": bool(constant_ok),
             "max_translation_residual_m": residuals["max_translation_residual_m"],
             "max_angular_residual_deg": residuals["max_angular_residual_deg"],
-            "mean_delta_translation_m": residuals["mean_translation"].tolist(),
-            "mean_delta_quaternion_xyzw": residuals["mean_quaternion_xyzw"].tolist(),
+            "mean_delta_translation_m": residuals["mean_delta_translation_m"],
+            "mean_delta_quaternion_xyzw": residuals["mean_delta_quaternion_xyzw"],
             "translation_threshold_m": residual_warn_translation_m,
             "angular_threshold_deg": residual_warn_angle_deg,
         },
+        "candidate_endpoint_mappings": candidate_mapping_summary,
         "fixed_marker_false_motion": {
             "visible_pose_count": len(marker_positions),
             "max_pairwise_displacement_m": marker_displacement,

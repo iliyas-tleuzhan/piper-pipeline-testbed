@@ -56,6 +56,17 @@ PY
 check_topic /wrist_camera/color/image_rect_color
 check_topic /joint_states_single
 check_topic /joint_states
+fk_verified="$(rosparam get /piper_x_handeye_model/fk_verified 2>/dev/null || echo false)"
+model_id="$(rosparam get /piper_x_handeye_model/physical_model_id 2>/dev/null || echo unresolved)"
+firmware="$(rosparam get /piper_x_handeye_model/firmware_version 2>/dev/null || echo unresolved)"
+selected_urdf="$(rosparam get /piper_x_handeye_model/selected_urdf_path 2>/dev/null || echo unresolved)"
+selected_urdf_sha="$(rosparam get /piper_x_handeye_model/selected_urdf_sha256 2>/dev/null || echo unresolved)"
+echo "physical_model_id: $model_id"
+echo "firmware_version: $firmware"
+echo "selected_urdf_path: $selected_urdf"
+echo "selected_urdf_sha256: $selected_urdf_sha"
+echo "fk_verified: $fk_verified"
+if [ "$fk_verified" != "true" ]; then fail=1; fi
 check_tf base_link gripper_base
 check_topic /aruco_simple/pose
 check_tf wrist_camera_color_optical_frame aruco_marker_frame
@@ -88,6 +99,12 @@ if rosnode list 2>/dev/null | grep -E "move_group|trajectory_bridge|openpi|demo_
   fail=1
 else
   echo "motion publishers from calibration stack: none_detected"
+fi
+
+if [ "$fail" -eq 0 ]; then
+  echo "handeye_collection_allowed: true"
+else
+  echo "handeye_collection_allowed: false"
 fi
 
 exit "$fail"

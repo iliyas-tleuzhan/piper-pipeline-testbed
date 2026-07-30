@@ -46,6 +46,54 @@ def camera_info_is_valid(camera_matrix: Any, width: int | None = None, height: i
     return True
 
 
+def camera_geometry_from_info(
+    *,
+    k: Any,
+    d: Any,
+    p: Any,
+    mode: str,
+    image_topic: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return camera matrix/distortion consistent with the selected image topic.
+
+    `image_rect*` topics are already rectified, so pose estimation must use the
+    left 3x3 block of CameraInfo.P and zero distortion. Raw image topics use K
+    and D. Mixing rectified pixels with raw intrinsics is a common source of
+    pose drift during hand-eye validation.
+    """
+
+    mode_value = mode.strip().lower()
+    if mode_value not in {"rectified", "raw"}:
+        raise ValueError(f"unknown image geometry mode {mode!r}")
+    topic = image_topic.lower()
+    if mode_value == "rectified":
+        if "rect" not in topic:
+            raise ValueError(f"rectified geometry mode requires a rectified image topic, got {image_topic}")
+        projection = np.asarray(p, dtype=float).reshape(-1)
+        if projection.size != 12:
+            raise ValueError("rectified geometry mode requires 12-element CameraInfo.P")
+        matrix = np.asarray(
+            [
+                [projection[0], projection[1], projection[2]],
+                [projection[4], projection[5], projection[6]],
+                [projection[8], projection[9], projection[10]],
+            ],
+            dtype=float,
+        )
+        if not camera_info_is_valid(matrix):
+            raise ValueError("CameraInfo.P does not contain valid rectified intrinsics")
+        return matrix, np.zeros(5, dtype=float)
+    if "rect" in topic:
+        raise ValueError(f"raw geometry mode requires an unrectified image topic, got {image_topic}")
+    matrix = np.asarray(k, dtype=float).reshape(3, 3)
+    dist = np.asarray(d if d else [0.0, 0.0, 0.0, 0.0, 0.0], dtype=float).reshape(-1)
+    if not camera_info_is_valid(matrix):
+        raise ValueError("CameraInfo.K does not contain valid raw intrinsics")
+    if not np.all(np.isfinite(dist)):
+        raise ValueError("CameraInfo.D contains non-finite distortion coefficients")
+    return matrix, dist
+
+
 def detect_piper_x_aruco_pose(
     image_rgb: np.ndarray,
     camera_matrix: Any,

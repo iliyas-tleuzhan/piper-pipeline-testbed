@@ -16,6 +16,7 @@ import numpy as np
 
 from piper_on_bunker.perception.piper_x_aruco_pose import PiperXArucoPoseConfig
 from piper_on_bunker.perception.piper_x_aruco_pose import camera_info_is_valid
+from piper_on_bunker.perception.piper_x_aruco_pose import camera_geometry_from_info
 from piper_on_bunker.perception.piper_x_aruco_pose import detect_piper_x_aruco_markers_only
 from piper_on_bunker.perception.piper_x_aruco_pose import detect_piper_x_aruco_pose
 from piper_on_bunker.perception.piper_x_aruco_pose import render_debug_image_rgb
@@ -44,6 +45,7 @@ def main() -> int:
             "usage: piper_x_aruco_pose_node.py "
             "_image_topic:=/wrist_camera/color/image_rect_color "
             "_camera_info_topic:=/wrist_camera/color/camera_info "
+            "_image_geometry_mode:=rectified "
             "_dictionary:=DICT_ARUCO_ORIGINAL _marker_id:=6 _marker_size_m:=0.100"
         )
         return 0
@@ -64,11 +66,17 @@ def main() -> int:
     marker_size_m = float(rospy.get_param("~marker_size_m", 0.100))
     camera_frame = rospy.get_param("~camera_frame", "wrist_camera_color_optical_frame")
     marker_frame = rospy.get_param("~marker_frame", "aruco_marker_frame")
+    image_geometry_mode = rospy.get_param("~image_geometry_mode", "rectified")
     log_period_s = float(rospy.get_param("~log_period_s", 10.0))
     config = PiperXArucoPoseConfig(dictionary, marker_id, marker_size_m, camera_frame, marker_frame)
+    try:
+        camera_geometry_from_info(k=[1, 0, 0, 0, 1, 0, 0, 0, 1], d=[0, 0, 0, 0, 0], p=[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], mode=image_geometry_mode, image_topic=image_topic)
+    except ValueError as exc:
+        rospy.logerr("Refusing ArUco node startup: %s", exc)
+        return 2
 
     bridge = CvBridge()
-    latest_info = {"matrix": None, "dist": None, "width": 0, "height": 0}
+    latest_info = {"matrix": None, "dist": None, "width": 0, "height": 0, "geometry_error": "no CameraInfo received"}
     last_log = 0.0
     last_visible = False
     pose_pub = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
@@ -80,18 +88,27 @@ def main() -> int:
     rospy.set_param("~marker_size_m", marker_size_m)
     rospy.set_param("~camera_frame", camera_frame)
     rospy.set_param("~marker_frame", marker_frame)
+    rospy.set_param("~image_geometry_mode", image_geometry_mode)
     rospy.set_param("/aruco_simple/dictionary", dictionary)
     rospy.set_param("/aruco_simple/marker_id", marker_id)
     rospy.set_param("/aruco_simple/marker_size", marker_size_m)
     rospy.set_param("/aruco_simple/camera_frame", camera_frame)
     rospy.set_param("/aruco_simple/marker_frame", marker_frame)
     rospy.set_param("/aruco_simple/debug_image_topic", debug_image_topic)
+    rospy.set_param("/aruco_simple/image_geometry_mode", image_geometry_mode)
 
     def on_info(msg: CameraInfo) -> None:
-        latest_info["matrix"] = list(msg.K)
-        latest_info["dist"] = list(msg.D) if msg.D else [0.0, 0.0, 0.0, 0.0, 0.0]
         latest_info["width"] = int(msg.width)
         latest_info["height"] = int(msg.height)
+        try:
+            matrix, dist = camera_geometry_from_info(k=msg.K, d=msg.D, p=msg.P, mode=image_geometry_mode, image_topic=image_topic)
+            latest_info["matrix"] = matrix.tolist()
+            latest_info["dist"] = dist.tolist()
+            latest_info["geometry_error"] = None
+        except ValueError as exc:
+            latest_info["matrix"] = None
+            latest_info["dist"] = None
+            latest_info["geometry_error"] = str(exc)
 
     def maybe_log(message: str, visible: bool = False) -> None:
         nonlocal last_log, last_visible
@@ -116,7 +133,7 @@ def main() -> int:
         if camera_info_is_valid(matrix, latest_info["width"], latest_info["height"]):
             result = detect_piper_x_aruco_pose(image_rgb, matrix, latest_info["dist"], config)
         else:
-            result = detect_piper_x_aruco_markers_only(image_rgb, config, reason="invalid or missing CameraInfo")
+            result = detect_piper_x_aruco_markers_only(image_rgb, config, reason=latest_info["geometry_error"] or "invalid or missing CameraInfo")
 
         debug_rgb = render_debug_image_rgb(image_rgb, result, config, matrix, latest_info["dist"])
         debug_pub.publish(rgb_array_to_image_msg(debug_rgb, msg, Image))
@@ -154,9 +171,10 @@ def main() -> int:
     rospy.Subscriber(camera_info_topic, CameraInfo, on_info, queue_size=1)
     rospy.Subscriber(image_topic, Image, on_image, queue_size=1)
     rospy.loginfo(
-        "PiPER-X ArUco pose node ready: image=%s camera_info=%s pose=%s dictionary=%s marker_id=%d marker_size_m=%.3f",
+        "PiPER-X ArUco pose node ready: image=%s camera_info=%s geometry=%s pose=%s dictionary=%s marker_id=%d marker_size_m=%.3f",
         image_topic,
         camera_info_topic,
+        image_geometry_mode,
         pose_topic,
         dictionary,
         marker_id,

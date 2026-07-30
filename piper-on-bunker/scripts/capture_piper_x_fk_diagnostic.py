@@ -40,6 +40,42 @@ def main() -> int:
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
     urdf = run_container(args.container, "P=$(rospack find piper_description)/urdf/piper_description.urdf; echo $P; sha256sum $P", 5)
+    urdf_candidates = run_container(
+        args.container,
+        r"""P=$(rospack find piper_description)/urdf
+find "$P" -maxdepth 1 -type f \( -name "*.urdf" -o -name "*.xacro" \) -print0 | sort -z | xargs -0 sha256sum""",
+        6,
+    )
+    revisions = run_container(
+        args.container,
+        r"""python3 - <<'PY'
+import json, subprocess
+from pathlib import Path
+items = {}
+for name, path in {
+    "piper_ros": "/root/ABot-Claw/robot_layer/arm_piper/agent_server/robot_driver_ros/src/piper_ros",
+    "piper_sdk_checkout": "/root/piper_sdk",
+}.items():
+    p = Path(path)
+    if (p / ".git").exists():
+        items[name] = subprocess.run(["git", "-C", str(p), "rev-parse", "HEAD"], text=True, capture_output=True, check=False).stdout.strip() or None
+    else:
+        items[name] = None
+try:
+    import importlib.metadata
+    items["piper_sdk_distribution_version"] = importlib.metadata.version("piper_sdk")
+except Exception as exc:
+    items["piper_sdk_distribution_version_error"] = repr(exc)
+try:
+    import piper_sdk
+    items["piper_sdk_module_file"] = getattr(piper_sdk, "__file__", None)
+    items["piper_sdk_module_version"] = getattr(piper_sdk, "__version__", None)
+except Exception as exc:
+    items["piper_sdk_module_error"] = repr(exc)
+print(json.dumps(items, indent=2, sort_keys=True))
+PY""",
+        8,
+    )
     sdk = run_container(
         args.container,
         rf"""python3 - <<'PY'
@@ -106,7 +142,10 @@ PY""",
             "base_to_gripper_tcp": run_container(args.container, "timeout 4 rosrun tf tf_echo base_link gripper_tcp", 6),
             "robot_description_hash": run_container(args.container, "rosparam get /robot_description | sha256sum", 6),
             "urdf_path_and_hash": urdf,
+            "urdf_candidate_hashes": urdf_candidates,
+            "piper_x_handeye_model_params": run_container(args.container, "rosparam get /piper_x_handeye_model 2>/dev/null || true", 6),
         },
+        "runtime_revisions": revisions,
         "sdk": sdk,
     }
     out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

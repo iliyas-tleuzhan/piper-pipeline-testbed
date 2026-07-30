@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from piper_on_bunker.diagnostics.piper_x_fk_compare import analyze_captures
-from piper_on_bunker.diagnostics.piper_x_fk_compare import parse_diagnostic_file
+from piper_on_bunker.diagnostics.piper_x_fk_compare import parse_diagnostic_path
 
 
 def main() -> int:
@@ -18,7 +18,7 @@ def main() -> int:
     args = parser.parse_args()
 
     ordered_paths = sorted((Path(path) for path in args.paths), key=lambda path: (path.stat().st_mtime_ns, str(path)))
-    captures = [parse_diagnostic_file(path) for path in ordered_paths]
+    captures = [parse_diagnostic_path(path) for path in ordered_paths]
     report = analyze_captures(captures)
     text = json.dumps(report, indent=2, sort_keys=True)
     print(text)

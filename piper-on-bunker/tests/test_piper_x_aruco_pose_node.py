@@ -5,6 +5,7 @@ from pathlib import Path
 
 from piper_on_bunker.perception.piper_x_aruco_pose import PiperXArucoPoseConfig
 from piper_on_bunker.perception.piper_x_aruco_pose import camera_info_is_valid
+from piper_on_bunker.perception.piper_x_aruco_pose import camera_geometry_from_info
 from piper_on_bunker.perception.piper_x_aruco_pose import detect_piper_x_aruco_pose
 from piper_on_bunker.perception.piper_x_aruco_pose import render_debug_image_rgb
 
@@ -26,6 +27,37 @@ def _marker_image(marker_id=6, dictionary_name="DICT_4X4_50"):
 
 def _camera_matrix():
     return [260.0, 0.0, 150.0, 0.0, 260.0, 150.0, 0.0, 0.0, 1.0]
+
+
+def test_rectified_image_geometry_uses_projection_and_zero_distortion():
+    matrix, dist = camera_geometry_from_info(
+        k=[100.0, 0.0, 10.0, 0.0, 100.0, 10.0, 0.0, 0.0, 1.0],
+        d=[1.0, 2.0, 3.0, 4.0, 5.0],
+        p=[260.0, 0.0, 150.0, 0.0, 0.0, 260.0, 151.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        mode="rectified",
+        image_topic="/wrist_camera/color/image_rect_color",
+    )
+    assert np.allclose(matrix, [[260.0, 0.0, 150.0], [0.0, 260.0, 151.0], [0.0, 0.0, 1.0]])
+    assert np.allclose(dist, [0.0, 0.0, 0.0, 0.0, 0.0])
+
+
+def test_raw_image_geometry_uses_k_and_distortion():
+    matrix, dist = camera_geometry_from_info(
+        k=[100.0, 0.0, 10.0, 0.0, 110.0, 11.0, 0.0, 0.0, 1.0],
+        d=[0.1, 0.2, 0.3, 0.4, 0.5],
+        p=[260.0, 0.0, 150.0, 0.0, 0.0, 260.0, 151.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        mode="raw",
+        image_topic="/wrist_camera/color/image_raw",
+    )
+    assert np.allclose(matrix, [[100.0, 0.0, 10.0], [0.0, 110.0, 11.0], [0.0, 0.0, 1.0]])
+    assert np.allclose(dist, [0.1, 0.2, 0.3, 0.4, 0.5])
+
+
+def test_image_geometry_mode_topic_mismatch_fails_closed():
+    with pytest.raises(ValueError, match="rectified geometry mode requires"):
+        camera_geometry_from_info(k=_camera_matrix(), d=[0.0] * 5, p=[260.0, 0.0, 150.0, 0.0, 0.0, 260.0, 150.0, 0.0, 0.0, 0.0, 1.0, 0.0], mode="rectified", image_topic="/wrist_camera/color/image_raw")
+    with pytest.raises(ValueError, match="raw geometry mode requires"):
+        camera_geometry_from_info(k=_camera_matrix(), d=[0.0] * 5, p=[260.0, 0.0, 150.0, 0.0, 0.0, 260.0, 150.0, 0.0, 0.0, 0.0, 1.0, 0.0], mode="raw", image_topic="/wrist_camera/color/image_rect_color")
 
 
 def test_detects_dict_4x4_50_marker_id_6_with_pose():

@@ -4,6 +4,20 @@ This note records the reproducible calibration setup for an Intel RealSense D435
 
 No robot motion is commanded by these tools. The PiPER driver is launched with `auto_enable:=false`; the arm is not enabled, and no trajectory/OpenPI replay process is started.
 
+## Current Blocker
+
+The saved PiPER-X D435i hand-eye calibration is rejected. Validation with the fixed marker observed approximately `0.365 m` of false `base_link -> aruco_marker_frame` motion across different stopped arm poses. Do not collect a new hand-eye calibration until the FK gate passes.
+
+The root issue is currently the PiPER-X FK/TF model, not stale ArUco TF:
+
+- `/joint_states_single` and `/joint_states` match numerically for joints 1-6.
+- `/end_pose` and `base_link -> gripper_base` disagree by about 6-13 cm depending on arm configuration.
+- The orientation disagreement also changes with configuration.
+- A single constant TCP transform does not explain the mismatch.
+- `aruco_marker_frame` disappears when the marker is not detected.
+
+The current default launcher fails closed unless the operator supplies a verified PiPER-X model, firmware, explicit URDF path/hash, and an FK verification result.
+
 ## Calibration Target
 
 Calibration mode:
@@ -66,8 +80,15 @@ Restart the background calibration stack with:
 
 ```bash
 cd ~/piper-pipeline-testbed
+PHYSICAL_MODEL_ID=agilex_piper_x \
+FIRMWARE_VERSION=<verified-firmware-string> \
+ROBOT_URDF_PATH=<verified-piper-x-urdf-path> \
+ROBOT_URDF_SHA256=<verified-urdf-sha256> \
+PIPER_X_FK_VERIFIED=true \
 ./tools/start_piper_x_d435i_handeye_calibration.sh
 ```
+
+Running the launcher without these values is expected to fail. That is intentional; it prevents `robot_state_publisher` from publishing unverified FK into the hand-eye backend.
 
 This recreates the detached tmux session:
 
@@ -104,6 +125,60 @@ wrist_camera_color_optical_frame -> aruco_marker_frame
 
 It publishes no robot commands and does not replay stale transforms after marker loss. The raw image topics do not contain overlays; use `/aruco_simple/debug_image` for the annotated view.
 
+The calibration stack defaults to rectified-consistent camera geometry:
+
+```text
+image_geometry_mode: rectified
+image_topic: /wrist_camera/color/image_rect_color
+intrinsics: CameraInfo.P left 3x3
+distortion: zero
+```
+
+Raw mode is retained only for explicit diagnostics:
+
+```text
+image_geometry_mode: raw
+image_topic: /wrist_camera/color/image_raw
+intrinsics: CameraInfo.K
+distortion: CameraInfo.D
+```
+
+The ArUco node refuses to start when the image topic and geometry mode are inconsistent.
+
+## FK Verification Gate
+
+Before restarting calibration, capture several manually selected stopped poses:
+
+```bash
+cd ~/piper-pipeline-testbed
+POSE_LABEL=pose_1 ./tools/check_piper_x_fk_consistency.sh
+```
+
+Move the arm manually using the separate proven PiPER-X teleoperation setup, wait for the arm to settle, then run again with `POSE_LABEL=pose_2`, `POSE_LABEL=pose_3`, and so on.
+
+Analyze all captures:
+
+```bash
+cd ~/piper-pipeline-testbed
+PYTHONPATH=piper-on-bunker/src \
+  python3 piper-on-bunker/scripts/analyze_piper_x_fk_diagnostics.py \
+    piper-on-bunker/data/local/piper_x_fk_diagnostics/*/*.json
+```
+
+Pass criteria:
+
+- physical model ID is known;
+- firmware version is known;
+- selected URDF path and SHA256 are recorded;
+- candidate endpoint frame semantics are known;
+- controller/SDK FK agrees with the selected ROS TF endpoint across multiple poses;
+- one-joint-at-a-time operator check passes for joint names, signs, magnitudes, and zero offsets;
+- constant TCP residuals are below configured tolerances;
+- `fk_verified: true`;
+- `handeye_collection_allowed: true`.
+
+Until then, hand-eye collection is blocked.
+
 ## Readiness Check
 
 After restart, run:
@@ -129,6 +204,8 @@ The check verifies:
 - marker size source of truth is `0.100 m`;
 - easy_handeye backend is running;
 - no obvious motion stack nodes were started by this calibration setup.
+- `fk_verified` is `true`;
+- `handeye_collection_allowed` is `true`.
 
 `/aruco_simple/pose` and `aruco_marker_frame` will remain unavailable until marker ID `6` is visible in the wrist camera image.
 
@@ -248,6 +325,16 @@ After a calibration has been saved, publish it with:
 cd ~/piper-pipeline-testbed
 ./tools/publish_piper_x_d435i_handeye.sh
 ```
+
+The helper currently refuses to publish by default because the saved transform is rejected. It can only be republished for read-only diagnostic reproduction with:
+
+```bash
+cd ~/piper-pipeline-testbed
+ALLOW_REJECTED_HANDEYE_PUBLISH_FOR_DIAGNOSTICS=true \
+  ./tools/publish_piper_x_d435i_handeye.sh
+```
+
+Do not use the rejected transform for new calibration acceptance or physical policy execution.
 
 This runs:
 

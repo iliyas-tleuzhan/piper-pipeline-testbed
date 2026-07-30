@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from piper_on_bunker.diagnostics.piper_x_fk_compare import analyze_captures
+from piper_on_bunker.diagnostics.piper_x_fk_compare import parse_diagnostic_path
 from piper_on_bunker.diagnostics.piper_x_fk_compare import parse_diagnostic_file
 
 
@@ -37,8 +38,17 @@ def test_fk_mismatch_is_configuration_dependent_and_not_constant_tcp():
     assert report["constant_gripper_to_controller_transform"]["verified"] is False
     assert report["constant_gripper_to_controller_transform"]["max_translation_residual_m"] > 0.02
     assert report["constant_gripper_to_controller_transform"]["max_angular_residual_deg"] > 5.0
+    assert "gripper_base" in report["candidate_endpoint_mappings"]
+    assert report["candidate_endpoint_mappings"]["gripper_base"]["constant_endpoint_to_controller_transform"]["verified"] is False
     assert report["fixed_marker_false_motion"]["visible_pose_count"] == 2
     assert report["fixed_marker_false_motion"]["max_pairwise_displacement_m"] == pytest.approx(0.2739945, rel=1e-5)
+
+
+def test_json_fk_capture_parses_candidate_endpoint_mappings():
+    pose = parse_diagnostic_path(DIAG_DIR / "live_fk_diagnostic_20260730T102601Z.json")
+
+    assert set(pose.endpoint_transforms) >= {"link6", "gripper_base", "gripper_tcp"}
+    assert pose.joint_states_single[:6] == pose.relayed_joint_states[:6]
 
 
 def test_analyzer_cli_writes_machine_readable_report(tmp_path):

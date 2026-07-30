@@ -37,6 +37,16 @@ Runtime `/robot_description` hash:
 
 Other installed URDF variants found in the same description package include `piper_description_old.urdf` and `piper_description_v100.urdf`. No explicitly named PiPER-X-specific URDF was found in the installed `piper_description` package during this audit.
 
+A PiPER-X-specific URDF candidate exists outside the active ROS description package:
+
+`/home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_description.urdf`
+
+Observed hash:
+
+`34126caac7d5b37bc2409f337ac246afbe0bb8cd47fc9f16df5038f19bd21e3a`
+
+This is evidence that a PiPER-X model exists on the machine, but it is not automatically verified for this physical arm, firmware, ROS frame contract, or `easy_handeye` endpoint. The calibration launcher now refuses to start `robot_state_publisher` unless an explicit URDF path/hash and an FK verification result are provided.
+
 Official `piper_ros` guidance says firmware older than `S-V1.6-3` should use `piper_description_old.urdf`; firmware `S-V1.6-3` or newer should use `piper_description.urdf`. The firmware could not be read successfully in this runtime, so the correct URDF remains unresolved.
 
 ## Firmware Status
@@ -49,6 +59,12 @@ The installed `piper_sdk` signatures were inspected before use. The read-only AP
 - `GetFK(mode="feedback"|"control")`
 
 A separate read-only SDK query returned firmware value `-1199`, and SDK FK values remained zero. This does not identify the firmware. It likely means the separate SDK instance could not obtain firmware/FK data from the live CAN/driver setup. Firmware version is therefore unresolved.
+
+Installed revisions observed during the audit:
+
+- `piper_ros`: `d539c15dd39371db625ee5b41e21c2bc1cd95c75` on branch `noetic`, with local modifications in the checkout.
+- host `piper_sdk`: `c05c5454b1cf61c05ad26385e0c0a3aa6d3c7bad`.
+- PiPER-X teleop repository: `9eec6e26d927a495efaaa0e7e5af2895310caefe`, with unrelated untracked/generated files.
 
 ## `/end_pose` Meaning
 
@@ -89,7 +105,17 @@ When the marker was visible, `base_link -> aruco_marker_frame` moved even though
 - pose 1: `[0.017, 0.032, 0.756]`
 - pose 3: `[-0.202, -0.074, 0.882]`
 
-The apparent fixed-marker displacement is about 0.274 m. In the pose where the marker was not visible, `aruco_marker_frame` correctly disappeared, so stale marker TF is not the explanation.
+The apparent fixed-marker displacement in the original three-pose diagnostic was about 0.274 m. Later validation of the saved 23-sample calibration observed up to about 0.365 m of false marker motion:
+
+```text
+baseline: [-0.239, -0.047, 0.932]
+samples:  [-0.458, -0.099, 0.949]
+          [-0.205, -0.003, 0.885]
+          [-0.067,  0.090, 0.810]
+          [ 0.057,  0.020, 0.730]
+```
+
+In the pose where the marker was not visible, `aruco_marker_frame` correctly disappeared, so stale marker TF is not the explanation.
 
 ## Conclusion
 

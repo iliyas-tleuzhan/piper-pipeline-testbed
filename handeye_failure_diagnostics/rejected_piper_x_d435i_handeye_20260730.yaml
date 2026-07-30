@@ -1,0 +1,48 @@
+schema_version: piper_x_handeye_rejection.v1
+status: rejected
+reason: >
+  Saved hand-eye calibration produced large fixed-marker drift across manually
+  selected stopped PiPER-X poses. The root cause is currently attributed to
+  unverified PiPER-X FK/URDF/frame semantics, with a secondary rectified-camera
+  geometry issue fixed in software after the rejected calibration was captured.
+source_saved_yaml:
+  container: abot-piper-noetic
+  path: /root/.ros/easy_handeye/piper_x_d435i_wrist_eye_on_hand.yaml
+parameters:
+  namespace: /piper_x_d435i_wrist_eye_on_hand/
+  eye_on_hand: true
+  robot_base_frame: base_link
+  robot_effector_frame: gripper_base
+  tracking_base_frame: wrist_camera_color_optical_frame
+  tracking_marker_frame: aruco_marker_frame
+transformation:
+  parent_frame: gripper_base
+  child_frame: wrist_camera_color_optical_frame
+  x: -0.04691137127557213
+  y: -0.05499380727707069
+  z: -0.1515220436421454
+  qx: -0.10526036717822013
+  qy: 0.004044373325145512
+  qz: 0.09080385673881869
+  qw: 0.9902820596917167
+computed_from:
+  sample_count: 23
+  algorithm: OpenCV/Tsai-Lenz
+  opencv_version: 4.2.0
+  source_sample_file: /tmp/piper_x_d435i_sample_list.yaml
+validation:
+  baseline_base_to_marker_m: [-0.239, -0.047, 0.932]
+  other_base_to_marker_samples_m:
+    - [-0.458, -0.099, 0.949]
+    - [-0.205, -0.003, 0.885]
+    - [-0.067, 0.090, 0.810]
+    - [0.057, 0.020, 0.730]
+  maximum_observed_false_marker_motion_m: 0.365
+  stale_marker_tf_ruled_out: true
+fk_gate:
+  fk_verified: false
+  handeye_collection_allowed: false
+  recalibration_allowed: false
+  blocker: >
+    Controller/SDK FK and robot_state_publisher TF must agree across multiple
+    stopped poses before another hand-eye calibration is accepted.

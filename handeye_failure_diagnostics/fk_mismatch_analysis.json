@@ -1,5 +1,32 @@
 {
   "all_first_six_joints_copied_exactly": true,
+  "candidate_endpoint_mappings": {
+    "gripper_base": {
+      "constant_endpoint_to_controller_transform": {
+        "angular_threshold_deg": 5.0,
+        "max_angular_residual_deg": 132.04443138745768,
+        "max_translation_residual_m": 0.12479330331569775,
+        "mean_delta_quaternion_xyzw": [
+          -0.16858948509179916,
+          0.0929213440928372,
+          -0.8320587886472134,
+          0.5202128233361754
+        ],
+        "mean_delta_translation_m": [
+          0.02338681506914847,
+          0.01817431776236185,
+          -0.0257520843512629
+        ],
+        "translation_threshold_m": 0.02,
+        "verified": false
+      },
+      "max_angular_error_deg": 174.4634073569085,
+      "max_translation_error_m": 0.13313694461343173,
+      "mean_angular_error_deg": 136.3339040405667,
+      "mean_translation_error_m": 0.10060510515358499,
+      "pose_count": 3
+    }
+  },
   "constant_gripper_to_controller_transform": {
     "angular_threshold_deg": 5.0,
     "max_angular_residual_deg": 132.04443138745768,
@@ -30,6 +57,28 @@
         0.032,
         0.756
       ],
+      "candidate_endpoint_mappings": {
+        "gripper_base": {
+          "angular_error_deg": 127.8267543485398,
+          "endpoint_to_controller_delta_quaternion_xyzw": [
+            0.03246154384681506,
+            -0.26836909417612453,
+            0.8564824883759129,
+            -0.43972949021821556
+          ],
+          "endpoint_to_controller_delta_translation_m": [
+            0.03451590808117655,
+            -0.04074206691919824,
+            0.025571281420440073
+          ],
+          "translation_error_m": 0.059204344105817104,
+          "urdf_position_m": [
+            -0.04,
+            -0.003,
+            0.588
+          ]
+        }
+      },
       "controller_position_m": [
         0.017566,
         1e-06,
@@ -58,6 +107,28 @@
     },
     {
       "base_to_marker_position_m": null,
+      "candidate_endpoint_mappings": {
+        "gripper_base": {
+          "angular_error_deg": 106.71155041625174,
+          "endpoint_to_controller_delta_quaternion_xyzw": [
+            0.5969884437174565,
+            -0.1437350598823426,
+            0.5164511910038665,
+            -0.5968443665974545
+          ],
+          "endpoint_to_controller_delta_translation_m": [
+            0.10537712840249823,
+            0.010142560640512568,
+            -0.027881029469819296
+          ],
+          "translation_error_m": 0.10947402674150614,
+          "urdf_position_m": [
+            -0.051,
+            0.019,
+            0.617
+          ]
+        }
+      },
       "controller_position_m": [
         0.052509,
         -0.011135,
@@ -90,6 +161,28 @@
         -0.074,
         0.882
       ],
+      "candidate_endpoint_mappings": {
+        "gripper_base": {
+          "angular_error_deg": 174.4634073569085,
+          "endpoint_to_controller_delta_quaternion_xyzw": [
+            -0.5694730506664528,
+            0.52334740189501,
+            0.6320406099707676,
+            -0.04829708937572431
+          ],
+          "endpoint_to_controller_delta_translation_m": [
+            -0.06973259127622938,
+            0.08512245956577122,
+            -0.07494650500440947
+          ],
+          "translation_error_m": 0.13313694461343173,
+          "urdf_position_m": [
+            -0.178,
+            0.047,
+            0.706
+          ]
+        }
+      },
       "controller_position_m": [
         -0.049494,
         0.046761,

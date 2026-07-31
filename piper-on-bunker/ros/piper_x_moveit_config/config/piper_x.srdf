@@ -23,4 +23,5 @@
   <disable_collisions link1="gripper_base" link2="gripper_link" reason="Adjacent"/>
   <disable_collisions link1="gripper_base" link2="gripper_link1" reason="Adjacent"/>
   <disable_collisions link1="gripper_base" link2="gripper_link2" reason="Adjacent"/>
+  <disable_collisions link1="gripper_link1" link2="gripper_link2" reason="PiPER-X gripper fingers overlap in simplified closed-state collision model"/>
 </robot>

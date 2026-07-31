@@ -22,11 +22,11 @@ User command -> ABot-Claw restricted action -> deterministic marker-touch state 
 
 Full-touch state machine:
 
-`IDLE -> CHECK_MARKER -> MOVE_HOME -> MOVE_PRE_TOUCH -> MOVE_TOUCH -> HOLD -> MOVE_RETRACT -> MOVE_HOME -> COMPLETE`
+`IDLE -> CHECK_MARKER -> MOVE_STAGING -> MOVE_PRE_TOUCH -> MOVE_TOUCH -> HOLD -> MOVE_RETRACT -> MOVE_STAGING -> COMPLETE`
 
 Pre-touch test state machine:
 
-`IDLE -> CHECK_MARKER -> MOVE_HOME -> MOVE_PRE_TOUCH -> MOVE_RETRACT -> MOVE_HOME -> COMPLETE`
+`IDLE -> CHECK_MARKER -> MOVE_STAGING -> MOVE_PRE_TOUCH -> MOVE_RETRACT -> MOVE_STAGING -> COMPLETE`
 
 Failure states include:
 
@@ -61,6 +61,10 @@ Current conservative defaults:
   - `touch`: velocity/acceleration scaling `0.02`
   - `retract`: velocity/acceleration scaling `0.05`
 - Physical execution enabled in committed config: `false`
+- Authoritative PiPER-X feedback topic: `/piper_x/joint_states`
+- MoveIt joint-state topic: `/joint_states`, relayed only from `/piper_x/joint_states`
+
+The normal PiPER ROS driver topic `/joint_states_single` is rejected for this PiPER-X runtime. A live failure showed raw CAN traffic on IDs including `2A2..2A8`, `251..256`, and `261..266`, while `/piper_ctrl_single_node` published fresh all-zero `/joint_states_single` and `/end_pose`. Fresh timestamps with all-zero values are not valid evidence of a stationary PiPER-X arm when the source cannot prove it decoded real PiPER-X feedback.
 
 Cartesian press settings remain only under `future_cartesian_mode.enabled: false`. They are not active in v1 because PiPER-X FK/URDF is not verified.
 
@@ -166,10 +170,35 @@ Verify:
 
 - MoveIt model appears in RViz as PiPER-X, not the normal PiPER arm.
 - Readiness reports `robot_description_name: piper_x`.
+- Readiness reports `/piper_x/joint_states: ok` and `pyagxarm_feedback_valid: True`.
+- `/joint_states_single` is not the MoveIt state authority.
+- Exactly one publisher owns `/joint_states`, and it is the PiPER-X read-only feedback bridge.
 - Each physical joint matches RViz when moved manually through the separate proven teleoperation setup.
 - The current normal-PiPER URDF is not assumed correct for PiPER-X.
 - ArUco ID 6 is visible.
 - The marker detector reports `DICT_ARUCO_ORIGINAL`, ID `6`, size `0.100 m`.
+
+Manual joint-by-joint feedback verification:
+
+1. Start the read-only runtime.
+2. Print the live bridge output:
+
+   ```bash
+   docker exec -i abot-piper-noetic bash -lc '
+     source /opt/ros/noetic/setup.bash
+     export ROS_MASTER_URI=http://localhost:11311
+     export ROS_HOSTNAME=localhost
+     rostopic echo -n 1 /piper_x/joint_states
+     rostopic echo -n 1 /piper_x/feedback_status
+   '
+   ```
+
+3. Using the separate proven PiPER-X teleoperation system, move only `joint1` slightly and stop.
+4. Verify only `joint1` changes in `/piper_x/joint_states`, with the expected sign and approximate magnitude.
+5. Repeat for `joint2` through `joint6`.
+6. Compare the bridge values against the working teleoperation program.
+
+Do not automate this movement from this repository.
 
 Inspect current/saved pose metadata without moving:
 
@@ -213,6 +242,15 @@ cd ~/piper-pipeline-testbed
 ```
 
 Repeat for `pre_touch`, `touch`, and `retract`.
+
+Any pose captured before the `/piper_x/joint_states` bridge was verified is invalidated and must be recaptured. Future taught poses must include:
+
+- `feedback_source_id: piper_x_pyagxarm_readonly_v1`
+- `pyagxarm_commit: 9eec6e26d927a495efaaa0e7e5af2895310caefe`
+- `joint_mapping_version: piper_x_pyagxarm_joint_order_rad_v1`
+- source topic `/piper_x/joint_states`
+
+The existing local manifest is not deleted, but the planner refuses old poses that lack this source identity.
 
 ## Stage 4 - Planning-Only
 

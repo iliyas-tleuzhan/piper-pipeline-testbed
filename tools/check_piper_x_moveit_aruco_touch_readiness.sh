@@ -48,7 +48,72 @@ except Exception as exc:
     print(f"/aruco_simple/pose: not_ready ({exc})")
 PY
 echo "joint state:"
-ok_topic /joint_states_single
+ok_topic /piper_x/joint_states
+echo "moveit joint state:"
+ok_topic /joint_states
+
+echo "raw CAN:"
+python3 - <<'PY'
+import subprocess
+try:
+    text = subprocess.check_output(["ip", "-details", "-statistics", "link", "show", "can0"], text=True, stderr=subprocess.STDOUT)
+except Exception as exc:
+    print(f"can0: not_ready ({exc})")
+else:
+    flags = text.split(">", 1)[0]
+    if "state ERROR-ACTIVE" in text and "UP" in flags and "LOWER_UP" in flags:
+        print("can0: ok UP LOWER_UP ERROR-ACTIVE")
+    else:
+        print("can0: not_ready " + text.replace("\n", " ")[:240])
+PY
+
+echo "pyAgxArm feedback status:"
+python3 - <<'PY'
+import json
+import rospy
+from std_msgs.msg import String
+
+rospy.init_node("piper_x_pyagxarm_feedback_readiness", anonymous=True, disable_signals=True)
+try:
+    msg = rospy.wait_for_message("/piper_x/feedback_status", String, timeout=1.0)
+    payload = json.loads(msg.data)
+    print("pyagxarm_connected:", payload.get("connected"))
+    print("pyagxarm_feedback_valid:", payload.get("feedback_valid"))
+    print("pyagxarm_feedback_age_s:", payload.get("feedback_age_s"))
+    print("pyagxarm_source_id:", payload.get("source_id"))
+    print("pyagxarm_joint_mapping_version:", payload.get("joint_mapping_version"))
+    print("pyagxarm_commit:", payload.get("teleop_repo_commit"))
+    print("pyagxarm_arm_model:", payload.get("arm_model"))
+    print("pyagxarm_firmware_profile:", payload.get("firmware_profile"))
+    print("pyagxarm_joint_values:", payload.get("positions_rad"))
+    print("pyagxarm_no_motion_commands_sent:", payload.get("no_motion_commands_sent"))
+    if payload.get("error"):
+        print("pyagxarm_error:", payload.get("error"))
+except Exception as exc:
+    print(f"pyagxarm_feedback_status: not_ready ({exc})")
+PY
+
+echo "joint-state publishers:"
+python3 - <<'PY'
+import subprocess
+for topic in ["/piper_x/joint_states", "/joint_states", "/joint_states_single"]:
+    try:
+        out = subprocess.check_output(["rostopic", "info", topic], text=True, stderr=subprocess.STDOUT)
+    except Exception as exc:
+        print(f"{topic}: unavailable ({exc})")
+        continue
+    pubs = []
+    in_pub = False
+    for line in out.splitlines():
+        if line.startswith("Publishers:"):
+            in_pub = True
+            continue
+        if line.startswith("Subscribers:"):
+            in_pub = False
+        if in_pub and line.strip().startswith("*"):
+            pubs.append(line.strip())
+    print(f"{topic}: publishers={pubs}")
+PY
 
 echo "aruco dictionary: $(rosparam get /aruco_simple/dictionary 2>/dev/null || echo unknown)"
 echo "aruco marker_id: $(rosparam get /aruco_simple/marker_id 2>/dev/null || echo unknown)"
@@ -136,8 +201,20 @@ for pose in required + diagnostic:
         print(f"taught_{pose}: invalid_position_count ({len(positions)})")
         status[pose] = False
     else:
-        print(f"taught_{pose}: exists")
-        status[pose] = True
+        meta = payload.get("metadata") or {}
+        required = {
+            "feedback_source_id": "piper_x_pyagxarm_readonly_v1",
+            "joint_mapping_version": "piper_x_pyagxarm_joint_order_rad_v1",
+            "pyagxarm_commit": "9eec6e26d927a495efaaa0e7e5af2895310caefe",
+        }
+        missing = [k for k in required if k not in meta]
+        mismatch = [k for k, v in required.items() if k in meta and str(meta.get(k)) != v]
+        if missing or mismatch:
+            print(f"taught_{pose}: invalidated_requires_recapture (missing={missing}, mismatch={mismatch})")
+            status[pose] = False
+        else:
+            print(f"taught_{pose}: exists")
+            status[pose] = True
 print(f"staging_test_planning_ready: {all(status.get(p) for p in ['staging', 'pre_touch', 'retract'])}")
 print(f"fixed_touch_planning_ready: {all(status.get(p) for p in ['staging', 'pre_touch', 'touch', 'retract'])}")
 print(f"home_transit_diagnostic_ready: {all(status.get(p) for p in ['home', 'pre_touch', 'retract'])}")
@@ -146,7 +223,7 @@ PY
 echo "physical_execution_enabled: false (committed config default)"
 echo "rejected_handeye_transform_used_for_targeting: false"
 echo "mock_ready: true"
-echo "live_read_only_ready: requires camera image, aruco debug image, joint state, and move_group; marker pose additionally requires marker ID 6 visible"
+echo "live_read_only_ready: requires camera image, aruco debug image, /piper_x/joint_states, pyAgxArm valid feedback, and move_group; marker pose additionally requires marker ID 6 visible"
 echo "live_planning_ready: see staging_test_planning_ready, fixed_touch_planning_ready, and home_transit_diagnostic_ready"
 echo "physical_execution_blocked: true"
 echo "physical_execution_ready: false"

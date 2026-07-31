@@ -43,7 +43,7 @@ def main() -> int:
     parser.add_argument("--positions", default="", help="Offline comma-separated six current joint positions in radians. Normal live use reads --joint-topic.")
     parser.add_argument("--ack", required=True, help="Must be SAVE_STOPPED_POSE.")
     parser.add_argument("--source", default="operator_read_current_joint_state")
-    parser.add_argument("--joint-topic", default="/joint_states_single")
+    parser.add_argument("--joint-topic", default="", help="Defaults to the profile authoritative PiPER-X feedback topic.")
     parser.add_argument("--max-velocity-rad-s", type=float, default=0.01)
     args = parser.parse_args()
     if args.ack != "SAVE_STOPPED_POSE":
@@ -61,7 +61,8 @@ def main() -> int:
             source_topic="offline --positions",
         )
     else:
-        snapshot = _read_live_joint_state(args.joint_topic, config.max_joint_state_age_s, args.max_velocity_rad_s)
+        topic = args.joint_topic or config.authoritative_joint_state_topic
+        snapshot = _read_live_joint_state(topic, config.max_joint_state_age_s, args.max_velocity_rad_s)
     strict_validation = {"passed": True, "error": None}
     try:
         validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits)
@@ -74,7 +75,18 @@ def main() -> int:
         "strict_validation": strict_validation,
     }
     print(json.dumps({"about_to_save": args.pose_name, "joint_state": snapshot.__dict__, "joint_limit_validation": teaching_validation, "motion_commanded": False}, indent=2, sort_keys=True))
-    pose = TaughtPose(args.pose_name, list(snapshot.joint_names), list(snapshot.positions), args.source)
+    pose_metadata = {
+        "feedback_source_id": config.required_feedback_source_id,
+        "pyagxarm_commit": config.required_pyagxarm_commit,
+        "arm_model": "agilex_piper_x",
+        "firmware_profile": "unresolved_read_only_feedback_only",
+        "joint_mapping_version": config.required_joint_mapping_version,
+        "source_topic": snapshot.source_topic,
+        "source_stamp_s": snapshot.stamp_s,
+        "robot_description_sha256": None,
+        "requires_manual_joint_by_joint_verification": True,
+    }
+    pose = TaughtPose(args.pose_name, list(snapshot.joint_names), list(snapshot.positions), args.source, pose_metadata)
     metadata = {
         "profile_id": config.profile_id,
         "task_id": config.task_id,
@@ -88,6 +100,9 @@ def main() -> int:
         "joint_limit_validation": teaching_validation,
         "source_topic": snapshot.source_topic,
         "source_stamp_s": snapshot.stamp_s,
+        "feedback_source_id": config.required_feedback_source_id,
+        "pyagxarm_commit": config.required_pyagxarm_commit,
+        "joint_mapping_version": config.required_joint_mapping_version,
         "motion_commanded": False,
     }
     save_taught_pose_manifest(config.taught_pose_manifest, pose, metadata)

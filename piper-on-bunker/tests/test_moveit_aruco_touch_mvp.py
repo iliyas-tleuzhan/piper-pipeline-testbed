@@ -29,12 +29,17 @@ def _config():
 
 def _poses(joint_names=None):
     names = list(joint_names or EXPECTED_JOINT_NAMES)
+    metadata = {
+        "feedback_source_id": "piper_x_pyagxarm_readonly_v1",
+        "joint_mapping_version": "piper_x_pyagxarm_joint_order_rad_v1",
+        "pyagxarm_commit": "9eec6e26d927a495efaaa0e7e5af2895310caefe",
+    }
     return {
-        "staging": TaughtPose("staging", names, [0.025, -0.045, -0.075, 0.015, 0.045, 0.015], "test"),
-        "home": TaughtPose("home", names, [0.0, -0.05, -0.08, 0.0, 0.05, 0.0], "test"),
-        "pre_touch": TaughtPose("pre_touch", names, [0.02, -0.04, -0.07, 0.0, 0.04, 0.0], "test"),
-        "touch": TaughtPose("touch", names, [0.03, -0.035, -0.065, 0.0, 0.035, 0.0], "test"),
-        "retract": TaughtPose("retract", names, [0.015, -0.055, -0.085, 0.0, 0.055, 0.0], "test"),
+        "staging": TaughtPose("staging", names, [0.025, -0.045, -0.075, 0.015, 0.045, 0.015], "test", metadata),
+        "home": TaughtPose("home", names, [0.0, -0.05, -0.08, 0.0, 0.05, 0.0], "test", metadata),
+        "pre_touch": TaughtPose("pre_touch", names, [0.02, -0.04, -0.07, 0.0, 0.04, 0.0], "test", metadata),
+        "touch": TaughtPose("touch", names, [0.03, -0.035, -0.065, 0.0, 0.035, 0.0], "test", metadata),
+        "retract": TaughtPose("retract", names, [0.015, -0.055, -0.085, 0.0, 0.055, 0.0], "test", metadata),
     }
 
 
@@ -290,7 +295,13 @@ def test_segment_scaling_selection():
 
 def test_large_pose_delta_review_warning():
     poses = _poses()
-    poses["pre_touch"] = TaughtPose("pre_touch", list(EXPECTED_JOINT_NAMES), [0.0, -0.04, -1.2, 0.02, 0.04, 0.02], "test")
+    poses["pre_touch"] = TaughtPose(
+        "pre_touch",
+        list(EXPECTED_JOINT_NAMES),
+        [0.0, -0.04, -1.2, 0.02, 0.04, 0.02],
+        "test",
+        poses["pre_touch"].metadata,
+    )
     cfg = replace(_config(), max_adjacent_joint_delta_rad=2.0)
     result = MoveItArucoTouchController(cfg, MockMoveItTouchBackend(), taught_poses=poses).run(planning_only=True)
     assert result.success

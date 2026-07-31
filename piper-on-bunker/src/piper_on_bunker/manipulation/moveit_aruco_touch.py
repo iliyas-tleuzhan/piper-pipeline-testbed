@@ -11,6 +11,9 @@ from typing import Any, Protocol
 import yaml
 
 from piper_on_bunker.mission_logging import MissionLogger
+from piper_on_bunker.hardware.piper_x_feedback import PIPER_X_FEEDBACK_SOURCE_ID
+from piper_on_bunker.hardware.piper_x_feedback import PIPER_X_JOINT_MAPPING_VERSION
+from piper_on_bunker.hardware.piper_x_feedback import PIPER_X_TELEOP_COMMIT
 
 
 EXPECTED_MARKER_DICTIONARY = "DICT_ARUCO_ORIGINAL"
@@ -64,6 +67,7 @@ class TaughtPose:
     joint_names: list[str]
     positions: list[float]
     source: str
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -167,6 +171,10 @@ class TouchConfig:
     robot_urdf_candidate_path: str
     robot_urdf_candidate_sha256: str
     piper_x_model_verified: bool
+    authoritative_joint_state_topic: str
+    required_feedback_source_id: str
+    required_joint_mapping_version: str
+    required_pyagxarm_commit: str
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "TouchConfig":
@@ -232,6 +240,12 @@ class TouchConfig:
             robot_urdf_candidate_path=str(robot["urdf_candidate_path"]),
             robot_urdf_candidate_sha256=str(robot["urdf_candidate_sha256"]),
             piper_x_model_verified=bool(robot.get("piper_x_model_verified", False)),
+            authoritative_joint_state_topic=str(
+                data.get("feedback", {}).get("authoritative_joint_state_topic", "/piper_x/joint_states")
+            ),
+            required_feedback_source_id=str(data.get("feedback", {}).get("required_feedback_source_id", PIPER_X_FEEDBACK_SOURCE_ID)),
+            required_joint_mapping_version=str(data.get("feedback", {}).get("required_joint_mapping_version", PIPER_X_JOINT_MAPPING_VERSION)),
+            required_pyagxarm_commit=str(data.get("feedback", {}).get("required_pyagxarm_commit", PIPER_X_TELEOP_COMMIT)),
         )
 
 
@@ -254,6 +268,7 @@ def load_taught_poses(path: str | Path) -> dict[str, TaughtPose]:
             joint_names=[str(v) for v in payload["joint_names"]],
             positions=[float(v) for v in payload["positions"]],
             source=str(payload.get("source", pose_path)),
+            metadata=dict(payload.get("metadata") or {}),
         )
     return poses
 
@@ -271,6 +286,7 @@ def save_taught_pose_manifest(path: str | Path, pose: TaughtPose, metadata: dict
         "joint_names": list(pose.joint_names),
         "positions": [float(v) for v in pose.positions],
         "source": pose.source,
+        "metadata": dict(pose.metadata),
         "saved_unix_s": time.time(),
     }
     pose_path.parent.mkdir(parents=True, exist_ok=True)
@@ -522,6 +538,7 @@ class RosMoveItJointSequenceBackend:
             "services": {},
             "move_group_available": False,
             "joint_topic": self.joint_topic,
+            "authoritative_joint_state_topic": self.config.authoritative_joint_state_topic,
         }
         try:
             import rosservice
@@ -1047,6 +1064,7 @@ class MoveItArucoTouchController:
         if require_taught_poses:
             for pose_name in self._required_pose_names(sequence):
                 pose = self._pose(pose_name)
+                self._validate_taught_pose_source(pose)
                 validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits, tolerance_rad=self.config.taught_pose_limit_tolerance_rad)
         for name, profile in self.config.motion_profiles.items():
             if float(profile["velocity_scaling"]) > 0.10 or float(profile["acceleration_scaling"]) > 0.10:
@@ -1131,6 +1149,27 @@ class MoveItArucoTouchController:
         pose = self.taught_poses[name]
         validate_joint_schema(pose.joint_names)
         return pose
+
+    def _validate_taught_pose_source(self, pose: TaughtPose) -> None:
+        metadata = pose.metadata or {}
+        expected = {
+            "feedback_source_id": self.config.required_feedback_source_id,
+            "joint_mapping_version": self.config.required_joint_mapping_version,
+            "pyagxarm_commit": self.config.required_pyagxarm_commit,
+        }
+        missing = [name for name in expected if name not in metadata]
+        if missing:
+            raise ValueError(
+                f"taught pose {pose.name} requires recapture from verified PiPER-X feedback; "
+                f"missing metadata {missing}"
+            )
+        mismatches = {
+            name: {"expected": value, "actual": metadata.get(name)}
+            for name, value in expected.items()
+            if str(metadata.get(name)) != str(value)
+        }
+        if mismatches:
+            raise ValueError(f"taught pose {pose.name} feedback-source mismatch: {mismatches}")
 
     def _annotate_plan(
         self,

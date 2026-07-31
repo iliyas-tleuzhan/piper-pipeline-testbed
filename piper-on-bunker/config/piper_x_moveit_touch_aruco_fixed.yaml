@@ -25,6 +25,16 @@ taught_poses:
   safe_recovery: safe_recovery
   manifest: piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml
 
+feedback:
+  authoritative_joint_state_topic: /piper_x/joint_states
+  required_feedback_source_id: piper_x_pyagxarm_readonly_v1
+  required_joint_mapping_version: piper_x_pyagxarm_joint_order_rad_v1
+  required_pyagxarm_commit: 9eec6e26d927a495efaaa0e7e5af2895310caefe
+  configured_arm_model: agilex_piper_x
+  configured_firmware_profile: unresolved_read_only_feedback_only
+  normal_piper_joint_state_topic_rejected: /joint_states_single
+  invalidated_pose_reason: normal PiPER piper_ctrl_single_node published fresh all-zero feedback from nondecoded PiPER-X CAN frames
+
 motion:
   motion_strategy: taught_joint_sequence
   hold_duration_s: 1.0

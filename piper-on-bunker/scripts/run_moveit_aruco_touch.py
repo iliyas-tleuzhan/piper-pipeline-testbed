@@ -69,13 +69,18 @@ def _rerun_live_in_noetic_container(argv: list[str]) -> int | None:
 
 
 def _mock_taught_poses() -> dict[str, TaughtPose]:
+    metadata = {
+        "feedback_source_id": "piper_x_pyagxarm_readonly_v1",
+        "joint_mapping_version": "piper_x_pyagxarm_joint_order_rad_v1",
+        "pyagxarm_commit": "9eec6e26d927a495efaaa0e7e5af2895310caefe",
+    }
     return {
-        "staging": TaughtPose("staging", list(EXPECTED_JOINT_NAMES), [0.025, -0.045, -0.075, 0.015, 0.045, 0.015], "mock"),
-        "home": TaughtPose("home", list(EXPECTED_JOINT_NAMES), [0.0, -0.05, -0.08, 0.0, 0.05, 0.0], "mock"),
-        "pre_touch": TaughtPose("pre_touch", list(EXPECTED_JOINT_NAMES), [0.03, -0.04, -0.07, 0.02, 0.04, 0.02], "mock"),
-        "touch": TaughtPose("touch", list(EXPECTED_JOINT_NAMES), [0.04, -0.035, -0.065, 0.02, 0.035, 0.02], "mock"),
-        "retract": TaughtPose("retract", list(EXPECTED_JOINT_NAMES), [0.025, -0.055, -0.085, 0.02, 0.055, 0.02], "mock"),
-        "safe_recovery": TaughtPose("safe_recovery", list(EXPECTED_JOINT_NAMES), [0.0, -0.06, -0.09, 0.0, 0.06, 0.0], "mock"),
+        "staging": TaughtPose("staging", list(EXPECTED_JOINT_NAMES), [0.025, -0.045, -0.075, 0.015, 0.045, 0.015], "mock", metadata),
+        "home": TaughtPose("home", list(EXPECTED_JOINT_NAMES), [0.0, -0.05, -0.08, 0.0, 0.05, 0.0], "mock", metadata),
+        "pre_touch": TaughtPose("pre_touch", list(EXPECTED_JOINT_NAMES), [0.03, -0.04, -0.07, 0.02, 0.04, 0.02], "mock", metadata),
+        "touch": TaughtPose("touch", list(EXPECTED_JOINT_NAMES), [0.04, -0.035, -0.065, 0.02, 0.035, 0.02], "mock", metadata),
+        "retract": TaughtPose("retract", list(EXPECTED_JOINT_NAMES), [0.025, -0.055, -0.085, 0.02, 0.055, 0.02], "mock", metadata),
+        "safe_recovery": TaughtPose("safe_recovery", list(EXPECTED_JOINT_NAMES), [0.0, -0.06, -0.09, 0.0, 0.06, 0.0], "mock", metadata),
     }
 
 
@@ -122,7 +127,7 @@ def main() -> int:
     backend = MockMoveItTouchBackend(marker=marker)
     if args.live:
         try:
-            backend = RosMoveItJointSequenceBackend(config)
+            backend = RosMoveItJointSequenceBackend(config, joint_topic=config.authoritative_joint_state_topic)
         except Exception as exc:
             print(f"Live MoveIt backend unavailable: {exc!r}", file=sys.stderr)
             return 2

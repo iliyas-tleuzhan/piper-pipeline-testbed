@@ -48,7 +48,7 @@ def main() -> int:
     parser.add_argument("--config", default="piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml")
     parser.add_argument("--pose-name", default="")
     parser.add_argument("--positions", default="", help="Offline comma-separated six-joint sample for validation.")
-    parser.add_argument("--joint-topic", default="/joint_states_single")
+    parser.add_argument("--joint-topic", default="", help="Defaults to the profile authoritative PiPER-X feedback topic.")
     parser.add_argument("--max-velocity-rad-s", type=float, default=0.01)
     args = parser.parse_args()
 
@@ -56,7 +56,8 @@ def main() -> int:
     poses = load_taught_poses(config.taught_pose_manifest)
     snapshot = _snapshot_from_args(args)
     if snapshot is None:
-        snapshot = _read_live_joint_state(args.joint_topic, config.max_joint_state_age_s, args.max_velocity_rad_s)
+        topic = args.joint_topic or config.authoritative_joint_state_topic
+        snapshot = _read_live_joint_state(topic, config.max_joint_state_age_s, args.max_velocity_rad_s)
     output = {
         "config": args.config,
         "planning_group": config.planning_group,

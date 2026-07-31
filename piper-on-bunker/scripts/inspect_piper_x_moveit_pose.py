@@ -70,7 +70,11 @@ def main() -> int:
     }
     if args.pose_name:
         output["selected_pose"] = None if args.pose_name not in poses else poses[args.pose_name].__dict__
-    validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits)
+    output["joint_limit_validation"] = {"passed": True, "error": None}
+    try:
+        validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits)
+    except ValueError as exc:
+        output["joint_limit_validation"] = {"passed": False, "error": str(exc)}
     output["current_joint_state"] = snapshot.__dict__
     print(json.dumps(output, indent=2, sort_keys=True))
     return 0

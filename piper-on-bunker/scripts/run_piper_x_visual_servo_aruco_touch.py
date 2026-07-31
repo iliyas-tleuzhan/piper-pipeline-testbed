@@ -12,6 +12,8 @@ import argparse
 import json
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ if SRC_ROOT.exists():
     sys.path.insert(0, str(SRC_ROOT))
 
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import camera_geometry_from_ros_info
+from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import depth_roi_m
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import estimate_depth_touch_step
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import load_visual_servo_touch_config
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import quaternion_xyzw_to_matrix
@@ -175,6 +178,99 @@ def _execute_world_delta(group: Any, config: Any, *, name: str, delta_world_m: l
     if not ok:
         raise RuntimeError(f"{name} MoveIt execute returned false")
     return {"name": name, "delta_world_m": [float(v) for v in delta_world_m], "cartesian_fraction": float(fraction)}
+
+
+def _center_depth_m_from_msg(msg: Any, config: Any) -> float | None:
+    depth = _depth_to_array(msg)
+    return depth_roi_m(
+        depth,
+        u=float(msg.width) / 2.0,
+        v=float(msg.height) / 2.0,
+        encoding=str(msg.encoding),
+        roi_px=config.depth_roi_px,
+    )
+
+
+def _capture_center_depth(config: Any) -> dict[str, Any]:
+    import rospy
+    from sensor_msgs.msg import Image
+
+    msg = rospy.wait_for_message(config.depth_image_topic, Image, timeout=config.max_depth_age_s)
+    now_s = float(rospy.Time.now().to_sec())
+    age_s = now_s - float(msg.header.stamp.to_sec())
+    if age_s > config.max_depth_age_s:
+        raise RuntimeError(f"stale depth image: {age_s:.3f}s")
+    return {
+        "depth_topic": config.depth_image_topic,
+        "depth_age_s": age_s,
+        "center_depth_m": _center_depth_m_from_msg(msg, config),
+        "marker_required": False,
+    }
+
+
+def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) -> dict[str, Any]:
+    import rospy
+    from sensor_msgs.msg import Image
+
+    stop_event = threading.Event()
+    done_event = threading.Event()
+    monitor: dict[str, Any] = {
+        "triggered": False,
+        "last_center_depth_m": None,
+        "samples": 0,
+        "stop_depth_m": config.continuous_forward_stop_depth_m,
+    }
+
+    def watch_depth() -> None:
+        while not done_event.is_set() and not rospy.is_shutdown():
+            try:
+                msg = rospy.wait_for_message(config.depth_image_topic, Image, timeout=max(0.05, config.max_depth_age_s))
+                depth_m = _center_depth_m_from_msg(msg, config)
+            except Exception as exc:
+                monitor["last_error"] = repr(exc)
+                continue
+            monitor["samples"] += 1
+            monitor["last_center_depth_m"] = depth_m
+            if depth_m is not None and depth_m > 0.0 and depth_m <= config.continuous_forward_stop_depth_m:
+                monitor["triggered"] = True
+                stop_event.set()
+                try:
+                    group.stop()
+                except Exception as exc:
+                    monitor["stop_error"] = repr(exc)
+                return
+
+    current = group.get_current_pose(config.end_effector_link).pose
+    axis = _normalized_forward(config, 1.0)
+    waypoint_count = max(1, int(float(distance_m) / max(config.simple_forward_step_m, 1e-6)))
+    waypoints = []
+    for index in range(1, waypoint_count + 1):
+        mag = min(float(distance_m), index * config.simple_forward_step_m)
+        waypoints.append(_pose_translated_in_world(current, [axis[0] * mag, axis[1] * mag, axis[2] * mag]))
+    plan, fraction = group.compute_cartesian_path(waypoints, float(config.cartesian_eef_step_m), 0.0)
+    if float(fraction) < float(config.cartesian_fraction_threshold):
+        raise RuntimeError(f"continuous forward Cartesian fraction {fraction:.3f} below {config.cartesian_fraction_threshold:.3f}")
+
+    thread = threading.Thread(target=watch_depth, daemon=True)
+    thread.start()
+    ok = False
+    try:
+        ok = bool(group.execute(plan, wait=True))
+    finally:
+        done_event.set()
+        try:
+            group.stop()
+        except Exception:
+            pass
+        thread.join(timeout=1.0)
+    return {
+        "name": "continuous_forward_until_depth",
+        "planned_forward_distance_m": float(distance_m),
+        "cartesian_fraction": float(fraction),
+        "moveit_execute_returned": ok,
+        "depth_stop_triggered": bool(monitor["triggered"]),
+        "depth_monitor": monitor,
+    }
 
 
 def _execution_blockers(config: Any, estimate: Any, *, allow_not_centered: bool) -> list[str]:
@@ -336,26 +432,17 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
     else:
         raise RuntimeError("vertical alignment did not converge before max_alignment_iterations")
 
-    total_forward = 0.0
-    index = 0
-    while not rospy.is_shutdown():
-        index += 1
-        report, estimate = _capture_estimate(config)
-        estimates.append(report)
-        blockers = _execution_blockers(config, estimate, allow_not_centered=True)
-        if blockers:
-            raise RuntimeError(f"continuous forward blocked: {blockers}")
-        depth = float(estimate.depth_m or 0.0)
-        if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
-            actions.append({"name": "forward_stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
-            break
-        step_mag = config.simple_forward_step_m
-        action = _execute_world_delta(group, config, name=f"forward_hold_height_step_{index}", delta_world_m=_normalized_forward(config, step_mag))
-        action["forward_component_m"] = step_mag
-        action["depth_m"] = depth
-        action["height_change_m"] = 0.0
+    center_depth_report = _capture_center_depth(config)
+    estimates.append({"forward_depth_precheck": center_depth_report})
+    depth = float(center_depth_report["center_depth_m"] or 0.0)
+    if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
+        actions.append({"name": "forward_stop_depth_already_reached", "depth_m": depth})
+        total_forward = 0.0
+    else:
+        forward_distance = max(config.simple_forward_step_m, depth + 0.05)
+        action = _execute_monitored_forward(group, config, distance_m=forward_distance)
         actions.append(action)
-        total_forward += step_mag
+        total_forward = float(action["planned_forward_distance_m"])
 
     return {
         "config": config_path,

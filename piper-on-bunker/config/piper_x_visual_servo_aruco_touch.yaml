@@ -43,6 +43,9 @@ alignment:
   image_center_tolerance_px: 24.0
   max_lateral_step_m: 0.010
   max_forward_step_m: 0.020
+  max_alignment_iterations: 6
+  cartesian_eef_step_m: 0.005
+  cartesian_fraction_threshold: 1.0
   contact_clearance_m: 0.003
 
 safety:

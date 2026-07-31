@@ -7,6 +7,7 @@ from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import deproj
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import depth_roi_m
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import estimate_depth_touch_step
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import load_visual_servo_touch_config
+from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import split_alignment_and_forward_steps
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import transform_camera_point_to_gripper
 
 cv2 = pytest.importorskip("cv2")
@@ -131,6 +132,25 @@ def test_estimator_requires_verified_handeye_and_measured_tip_offset():
     assert estimate.execution_allowed is False
     assert "eye-in-hand calibration is not verified" in estimate.execution_blockers
     assert "gripper tip offset is not measured" in estimate.execution_blockers
+
+
+def test_split_alignment_and_forward_steps_stops_lateral_before_depth_touch():
+    estimate = estimate_depth_touch_step(
+        image_rgb=_marker_image(offset=(35, 0)),
+        depth_image=np.full((240, 320), 400, dtype=np.uint16),
+        depth_encoding="16UC1",
+        camera_matrix=_camera_matrix(),
+        dist_coeffs=[0.0] * 5,
+        config=_config(),
+    )
+    align, forward = split_alignment_and_forward_steps(estimate)
+    assert align is not None
+    assert forward is not None
+    assert align[2] == pytest.approx(0.0)
+    assert abs(align[0]) > 0.0 or abs(align[1]) > 0.0
+    assert forward[0] == pytest.approx(0.0)
+    assert forward[1] == pytest.approx(0.0)
+    assert forward[2] == pytest.approx(0.02)
 
 
 def test_committed_config_is_execution_blocked_by_default():

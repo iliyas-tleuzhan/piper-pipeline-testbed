@@ -48,6 +48,9 @@ class VisualServoTouchConfig:
     image_center_tolerance_px: float
     max_lateral_step_m: float
     max_forward_step_m: float
+    max_alignment_iterations: int
+    cartesian_eef_step_m: float
+    cartesian_fraction_threshold: float
     contact_clearance_m: float
     require_verified_handeye_for_execution: bool
     physical_execution_enabled_by_default: bool
@@ -92,6 +95,9 @@ class VisualServoTouchConfig:
             image_center_tolerance_px=float(align["image_center_tolerance_px"]),
             max_lateral_step_m=float(align["max_lateral_step_m"]),
             max_forward_step_m=float(align["max_forward_step_m"]),
+            max_alignment_iterations=int(align.get("max_alignment_iterations", 6)),
+            cartesian_eef_step_m=float(align.get("cartesian_eef_step_m", 0.005)),
+            cartesian_fraction_threshold=float(align.get("cartesian_fraction_threshold", 1.0)),
             contact_clearance_m=float(align["contact_clearance_m"]),
             require_verified_handeye_for_execution=bool(safety.get("require_verified_handeye_for_execution", True)),
             physical_execution_enabled_by_default=bool(safety["physical_execution_enabled_by_default"]),
@@ -217,6 +223,13 @@ def clamp_step(delta_m: list[float], *, max_lateral_step_m: float, max_forward_s
         float(np.clip(dy, -max_lateral_step_m, max_lateral_step_m)),
         float(np.clip(dz, -max_forward_step_m, max_forward_step_m)),
     ]
+
+
+def split_alignment_and_forward_steps(estimate: DepthTouchEstimate) -> tuple[list[float] | None, list[float] | None]:
+    if estimate.limited_step_gripper_m is None:
+        return None, None
+    x, y, z = [float(v) for v in estimate.limited_step_gripper_m]
+    return [x, y, 0.0], [0.0, 0.0, z]
 
 
 def estimate_depth_touch_step(

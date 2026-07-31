@@ -31,3 +31,27 @@ Before physical visual servoing can be enabled in a local ignored config, fill i
 - live aligned depth on `/wrist_camera/aligned_depth_to_color/image_raw`.
 
 The current tool does not command motion. It reports blockers and the computed step so the setup can be checked safely.
+
+Execution mode, after using an ignored local config with measured values:
+
+```bash
+cd ~/piper-pipeline-testbed
+python3 piper-on-bunker/scripts/run_piper_x_visual_servo_aruco_touch.py \
+  --config piper-on-bunker/config/piper_x_visual_servo_aruco_touch.local.yaml \
+  --live \
+  --mode align_then_depth_touch \
+  --execute \
+  --confirm ALIGN_DEPTH_TOUCH
+```
+
+Execution behavior:
+
+1. Estimate marker center and depth.
+2. If the marker is not centered, execute only the lateral alignment component.
+3. Repeat until the marker is within `image_center_tolerance_px`.
+4. Stop alignment and take a fresh depth estimate.
+5. Execute only the bounded forward component toward the marker.
+
+The command refuses execution when the marker is missing, depth is stale, the
+gripper tip offset is unmeasured, the eye-in-hand transform is unverified, or
+physical execution is disabled in the selected config.

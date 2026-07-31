@@ -92,6 +92,7 @@ def main() -> int:
     parser.add_argument("--mock", action="store_true", help="Use a mock MoveIt backend.")
     parser.add_argument("--live", action="store_true", help="Use the live ROS MoveIt backend. Never silently falls back to mock.")
     parser.add_argument("--sequence", choices=["pre_touch_test", "full_touch"], default="full_touch")
+    parser.add_argument("--publish-plans-to-rviz", action="store_true", help="Publish planning-only DisplayTrajectory messages for RViz review.")
     parser.add_argument("--mock-taught-poses", action="store_true", help="Use deterministic mock taught poses.")
     marker_visible = parser.add_mutually_exclusive_group()
     marker_visible.add_argument("--mock-marker-visible", dest="mock_marker_visible", action="store_true", default=True)
@@ -135,6 +136,7 @@ def main() -> int:
             execute=args.execute,
             confirm=args.confirm or None,
             sequence=args.sequence,
+            publish_plans_to_rviz=args.publish_plans_to_rviz,
         )
     print(result_to_json(result))
     return 0 if result.success else 1

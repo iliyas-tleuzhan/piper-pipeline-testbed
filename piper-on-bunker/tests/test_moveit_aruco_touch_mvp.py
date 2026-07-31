@@ -8,10 +8,13 @@ from piper_on_bunker.manipulation.moveit_aruco_touch import EXPECTED_JOINT_NAMES
 from piper_on_bunker.manipulation.moveit_aruco_touch import MarkerStatus
 from piper_on_bunker.manipulation.moveit_aruco_touch import MockMoveItTouchBackend
 from piper_on_bunker.manipulation.moveit_aruco_touch import MoveItArucoTouchController
+from piper_on_bunker.manipulation.moveit_aruco_touch import PlanSummary
 from piper_on_bunker.manipulation.moveit_aruco_touch import RestrictedArucoTouchAPI
 from piper_on_bunker.manipulation.moveit_aruco_touch import TaughtPose
 from piper_on_bunker.manipulation.moveit_aruco_touch import TouchFailure
+from piper_on_bunker.manipulation.moveit_aruco_touch import _trajectory_metrics_from_arrays
 from piper_on_bunker.manipulation.moveit_aruco_touch import extract_named_joint_state
+from piper_on_bunker.manipulation.moveit_aruco_touch import linear_trajectory_metrics
 from piper_on_bunker.manipulation.moveit_aruco_touch import load_touch_config
 from piper_on_bunker.manipulation.moveit_aruco_touch import save_taught_pose_manifest
 from piper_on_bunker.mission_logging import MissionLogger
@@ -100,10 +103,10 @@ def test_planning_only_never_executes():
 
 
 def test_joint_jump_rejected():
-    backend = MockMoveItTouchBackend(max_joint_delta_rad=0.5)
-    result = _run(backend=backend)
+    cfg = replace(_config(), max_adjacent_joint_delta_rad=0.001)
+    result = MoveItArucoTouchController(cfg, MockMoveItTouchBackend(), taught_poses=_poses()).run(planning_only=True)
     assert not result.success
-    assert "joint jump" in result.failure_reason
+    assert "adjacent joint step" in result.failure_reason
 
 
 def test_full_touch_uses_taught_touch_pose():
@@ -247,3 +250,152 @@ def test_cli_refuses_mock_execute():
     )
     assert result.returncode == 2
     assert "--execute is refused with --mock" in result.stderr
+
+
+def test_mock_plans_are_chained_from_previous_endpoint():
+    backend = MockMoveItTouchBackend()
+    result = _run(backend=backend)
+    assert result.success
+    plans = result.outputs["plans"]
+    for previous, current in zip(plans, plans[1:]):
+        previous_final = previous["metrics"]["final_point_positions"]
+        current_start = current["metrics"]["start_positions"]
+        assert current_start == previous_final
+        assert current["metrics"]["maximum_continuity_error_rad"] == 0.0
+
+
+def test_adjacent_point_delta_calculation():
+    metrics = linear_trajectory_metrics(
+        joint_names=list(EXPECTED_JOINT_NAMES),
+        start_positions=[0.0] * 6,
+        target_positions=[0.0, 0.02, 0.0, 0.0, 0.0, 0.0],
+        duration_s=2.0,
+    )
+    assert metrics.maximum_adjacent_joint_delta_rad == pytest.approx(0.02)
+    assert metrics.maximum_adjacent_joint_delta_joint == "joint2"
+    assert metrics.maximum_adjacent_joint_delta_point_index == 1
+    assert metrics.maximum_derived_velocity_rad_s == pytest.approx(0.01)
+
+
+def test_excessive_segment_duration_rejected():
+    class SlowBackend(MockMoveItTouchBackend):
+        def plan_joint_pose(self, name, pose, config, *, start_state):
+            metrics = linear_trajectory_metrics(
+                joint_names=list(pose.joint_names),
+                start_positions=list(start_state.positions),
+                target_positions=list(pose.positions),
+                duration_s=100.0,
+            )
+            return PlanSummary(
+                name,
+                True,
+                metrics.trajectory_points,
+                estimated_duration_s=metrics.total_duration_s,
+                maximum_joint_delta_rad=metrics.maximum_joint_delta_rad,
+                maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
+                execution_capable=True,
+                metrics=metrics.__dict__,
+            )
+
+    result = _run(backend=SlowBackend())
+    assert not result.success
+    assert "segment duration" in result.failure_reason
+    assert result.outputs["partial_plans"][0]["metrics"]["total_duration_s"] == 100.0
+
+
+def test_discontinuous_segment_start_rejected():
+    class DiscontinuousBackend(MockMoveItTouchBackend):
+        def plan_joint_pose(self, name, pose, config, *, start_state):
+            first = [value + 0.01 for value in start_state.positions]
+            metrics = _trajectory_metrics_from_arrays(
+                joint_names=list(pose.joint_names),
+                start_positions=list(start_state.positions),
+                target_positions=list(pose.positions),
+                point_positions=[first, list(pose.positions)],
+                point_times_s=[0.0, 2.0],
+            )
+            return PlanSummary(
+                name,
+                True,
+                metrics.trajectory_points,
+                estimated_duration_s=metrics.total_duration_s,
+                maximum_joint_delta_rad=metrics.maximum_joint_delta_rad,
+                maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
+                execution_capable=True,
+                metrics=metrics.__dict__,
+            )
+
+    result = _run(backend=DiscontinuousBackend())
+    assert not result.success
+    assert "continuity error" in result.failure_reason
+
+
+def test_non_monotonic_timestamps_rejected():
+    class NonMonotonicBackend(MockMoveItTouchBackend):
+        def plan_joint_pose(self, name, pose, config, *, start_state):
+            metrics = _trajectory_metrics_from_arrays(
+                joint_names=list(pose.joint_names),
+                start_positions=list(start_state.positions),
+                target_positions=list(pose.positions),
+                point_positions=[list(start_state.positions), list(pose.positions)],
+                point_times_s=[0.0, 0.0],
+            )
+            return PlanSummary(
+                name,
+                True,
+                metrics.trajectory_points,
+                estimated_duration_s=metrics.total_duration_s,
+                maximum_joint_delta_rad=metrics.maximum_joint_delta_rad,
+                maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
+                execution_capable=True,
+                metrics=metrics.__dict__,
+            )
+
+    result = _run(backend=NonMonotonicBackend())
+    assert not result.success
+    assert "timestamps" in result.failure_reason
+
+
+def test_empty_trajectory_rejected():
+    class EmptyBackend(MockMoveItTouchBackend):
+        def plan_joint_pose(self, name, pose, config, *, start_state):
+            return PlanSummary(name, True, 0, execution_capable=True, metrics=None)
+
+    result = _run(backend=EmptyBackend())
+    assert not result.success
+    assert "trajectory metrics" in result.failure_reason
+
+
+def test_zero_duration_nonzero_motion_rejected():
+    class ZeroDurationBackend(MockMoveItTouchBackend):
+        def plan_joint_pose(self, name, pose, config, *, start_state):
+            metrics = _trajectory_metrics_from_arrays(
+                joint_names=list(pose.joint_names),
+                start_positions=list(start_state.positions),
+                target_positions=list(pose.positions),
+                point_positions=[list(start_state.positions), list(pose.positions)],
+                point_times_s=[0.0, 0.0],
+            )
+            payload = {**metrics.__dict__, "monotonic_timestamps": True}
+            return PlanSummary(
+                name,
+                True,
+                metrics.trajectory_points,
+                estimated_duration_s=0.0,
+                maximum_joint_delta_rad=metrics.maximum_joint_delta_rad,
+                maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
+                execution_capable=True,
+                metrics=payload,
+            )
+
+    result = _run(backend=ZeroDurationBackend())
+    assert not result.success
+    assert "zero duration" in result.failure_reason
+
+
+def test_planning_only_rviz_publish_supported_by_mock():
+    backend = MockMoveItTouchBackend()
+    controller = MoveItArucoTouchController(_config(), backend, taught_poses=_poses())
+    result = controller.run(planning_only=True, publish_plans_to_rviz=True)
+    assert result.success
+    assert result.outputs["rviz_display_trajectory_published"] is True

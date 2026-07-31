@@ -32,6 +32,12 @@ motion:
   planning_timeout_s: 10.0
   execution_timeout_s: 20.0
   max_joint_jump_rad: 0.20
+  max_adjacent_joint_delta_rad: 0.10
+  max_segment_duration_s: 30.0
+  max_mission_duration_s: 90.0
+  min_effective_joint_velocity_rad_s: 0.001
+  max_target_error_rad: 0.02
+  continuity_tolerance_rad: 0.001
   future_cartesian_mode:
     enabled: false
     touch_direction_ee: [0.0, 0.0, 1.0]

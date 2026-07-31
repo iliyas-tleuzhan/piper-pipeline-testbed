@@ -242,10 +242,47 @@ Planning-only must report:
 - trajectory points;
 - estimated duration;
 - maximum joint delta;
+- maximum adjacent joint delta;
+- first/final trajectory positions;
+- target error;
+- segment continuity error;
+- effective derived velocity and acceleration;
 - velocity and acceleration scaling;
 - why execution is blocked.
 
-Inspect every planned segment in RViz before any physical test.
+Inspect every planned segment in RViz before any physical test:
+
+```bash
+cd ~/piper-pipeline-testbed
+python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
+  --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
+  --live \
+  --planning-only \
+  --sequence pre_touch_test \
+  --publish-plans-to-rviz
+```
+
+Generate both planning reports:
+
+```bash
+cd ~/piper-pipeline-testbed
+./tools/check_piper_x_moveit_plans.sh
+```
+
+The controller now plans sequentially:
+
+`actual current state -> home -> pre_touch -> touch -> retract -> home`
+
+Every segment must start at the previous segment's final joint state. Any discontinuity above `continuity_tolerance_rad` fails planning.
+
+Current diagnostic timing gate:
+
+- `max_segment_duration_s: 30.0`
+- `max_mission_duration_s: 90.0`
+- `min_effective_joint_velocity_rad_s: 0.001`
+- `max_adjacent_joint_delta_rad: 0.10`
+
+A plan that assigns roughly `100 s` to a segment is treated as diagnostic-only and blocked. With the current MoveIt limits, the effective joint speed is `0.5 rad/s * 0.05 = 0.025 rad/s`; a taught segment that moves one joint about `2.5 rad` will therefore take about `100 s`. Do not shorten trajectory timestamps manually. Either review/reteach poses, then rerun planning, or explicitly revise the conservative velocity configuration after operator review.
 
 ## Stage 5 - Guarded Physical Test
 

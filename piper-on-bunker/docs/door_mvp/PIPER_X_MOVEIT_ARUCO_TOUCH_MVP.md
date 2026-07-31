@@ -1,6 +1,6 @@
 # PiPER-X MoveIt Fixed ArUco Touch MVP
 
-This is a constrained deterministic baseline. It does not use OpenPI, VLA inference, dynamic marker targeting, Bunker navigation, or the rejected D435i hand-eye calibration.
+This is a constrained deterministic baseline. It does not use OpenPI, VLA inference, dynamic marker targeting, Bunker navigation, Cartesian press generation, or the rejected D435i hand-eye calibration.
 
 ## Task
 
@@ -14,15 +14,19 @@ Touch and retract from one fixed marker:
 - Board: fixed
 - Marker location: fixed
 
-The marker is only a visibility gate for this MVP. The system does not transform `aruco_marker_frame` into `base_link` and does not use marker pose to generate the target.
+The marker is only a visibility and identity gate for this MVP. The system does not transform `aruco_marker_frame` into `base_link` and does not use marker pose to generate the target.
 
 ## Architecture
 
 User command -> ABot-Claw restricted action -> deterministic marker-touch state machine -> MoveIt manipulation backend -> PiPER-X.
 
-State machine:
+Full-touch state machine:
 
-`IDLE -> CHECK_MARKER -> MOVE_HOME -> MOVE_PRE_TOUCH -> APPROACH -> TOUCH -> HOLD -> RETRACT -> MOVE_HOME -> COMPLETE`
+`IDLE -> CHECK_MARKER -> MOVE_HOME -> MOVE_PRE_TOUCH -> MOVE_TOUCH -> HOLD -> MOVE_RETRACT -> MOVE_HOME -> COMPLETE`
+
+Pre-touch test state machine:
+
+`IDLE -> CHECK_MARKER -> MOVE_HOME -> MOVE_PRE_TOUCH -> MOVE_RETRACT -> MOVE_HOME -> COMPLETE`
 
 Failure states include:
 
@@ -47,14 +51,14 @@ Current conservative defaults:
 
 - Planning group: `arm`
 - End-effector link: `gripper_tcp`
-- Press direction: configured in end-effector coordinates as `[0.0, 0.0, 1.0]`
-- Press distance: `0.020 m`
+- Active motion strategy: `taught_joint_sequence`
+- Required taught poses: `home`, `pre_touch`, `touch`, `retract`
 - Hold duration: `1.0 s`
-- Retract distance: `0.020 m`
 - Velocity scaling: `0.05`
 - Acceleration scaling: `0.05`
-- Required Cartesian path fraction: `1.0`
 - Physical execution enabled in committed config: `false`
+
+Cartesian press settings remain only under `future_cartesian_mode.enabled: false`. They are not active in v1 because PiPER-X FK/URDF is not verified.
 
 The PiPER-X model remains unverified. The candidate URDF is:
 
@@ -105,7 +109,8 @@ python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
   --mock \
   --mock-taught-poses \
-  --planning-only
+  --planning-only \
+  --sequence full_touch
 ```
 
 Inspect the audit log:
@@ -114,7 +119,21 @@ Inspect the audit log:
 
 ## Stage 2 - Live Read-Only
 
-Start ROS and MoveIt without physical execution. Verify:
+Start ROS and MoveIt without physical execution:
+
+```bash
+cd ~/piper-pipeline-testbed
+./tools/start_piper_x_moveit_aruco_touch_runtime.sh
+```
+
+Check readiness:
+
+```bash
+cd ~/piper-pipeline-testbed
+./tools/check_piper_x_moveit_aruco_touch_readiness.sh
+```
+
+Verify:
 
 - MoveIt model appears in RViz.
 - Each physical joint matches RViz when moved manually through the separate proven teleoperation setup.
@@ -138,9 +157,19 @@ Required taught poses:
 
 - `home`
 - `pre_touch`
+- `touch`
+- `retract`
 - optional `safe_recovery`
 
-Do not teach the physical contact pose directly. Teach `pre_touch` approximately 2-4 cm before the marker. The contact motion is generated later as a short constrained Cartesian advance and inverse retract.
+Teach all active motion as stopped joint poses. Do not use camera pose or FK to calculate any target.
+
+Procedure:
+
+1. Teach `home`: move through existing proven teleoperation, stop completely, inspect current state, save `home`.
+2. Teach `pre_touch`: place the tool several centimetres before marker, stop, save `pre_touch`.
+3. Teach `touch`: manually and slowly position the tool at very light marker contact using the proven teleoperation system, do not push deeply, stop, save `touch`.
+4. Teach `retract`: manually move safely away from marker, stop, save `retract`.
+5. Return to `home` manually.
 
 Save a stopped pose after operator inspection:
 
@@ -149,25 +178,35 @@ cd ~/piper-pipeline-testbed
 ./tools/save_piper_x_moveit_taught_pose.sh \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
   --pose-name home \
-  --positions "J1,J2,J3,J4,J5,J6" \
   --ack SAVE_STOPPED_POSE
 ```
 
-Repeat for `pre_touch`.
+Repeat for `pre_touch`, `touch`, and `retract`.
 
 ## Stage 4 - Planning-Only
 
-After taught poses exist, run planning-only first:
+After taught poses exist, run live check-only first:
 
 ```bash
 cd ~/piper-pipeline-testbed
 python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
-  --mock \
-  --planning-only
+  --live \
+  --check-only
 ```
 
-For a future real MoveIt backend, planning-only must report:
+Then run planning-only for the safe first sequence:
+
+```bash
+cd ~/piper-pipeline-testbed
+python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
+  --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
+  --live \
+  --planning-only \
+  --sequence pre_touch_test
+```
+
+Planning-only must report:
 
 - active robot model;
 - planning group;
@@ -175,13 +214,12 @@ For a future real MoveIt backend, planning-only must report:
 - marker status;
 - taught pose source;
 - trajectory points;
-- Cartesian path fraction;
 - estimated duration;
 - maximum joint delta;
 - velocity and acceleration scaling;
 - why execution is blocked.
 
-Inspect the generated path in RViz before any physical test.
+Inspect every planned segment in RViz before any physical test.
 
 ## Stage 5 - Guarded Physical Test
 
@@ -189,22 +227,35 @@ Do not run physical motion until:
 
 - PiPER-X model/URDF is verified or a taught-joint fallback is explicitly chosen;
 - marker ID 6 is fresh and visible;
-- taught poses are reviewed;
-- Cartesian path fraction is `1.0`;
+- taught `home`, `pre_touch`, `touch`, and `retract` poses are reviewed;
 - collision scene is checked;
 - workspace is clear;
 - a soft/blunt tool is attached if contact is possible;
 - emergency stop is ready.
 
-First physical test should be pre-touch only. Then test a much smaller press distance than `0.020 m` if needed. Increase only after operator inspection.
-
-Physical execution must require:
+First physical test must omit the touch segment:
 
 ```bash
---execute --confirm FIXED_ARUCO_TOUCH
+cd ~/piper-pipeline-testbed
+python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
+  --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
+  --live \
+  --execute \
+  --sequence pre_touch_test \
+  --confirm PRE_TOUCH_TEST
 ```
 
-The committed config keeps physical execution disabled by default, so this command is intentionally not ready to move the robot yet.
+That sequence is:
+
+`home -> pre_touch -> retract -> home`
+
+Only after that succeeds, enable the full touch segment at minimum speed:
+
+```bash
+--execute --sequence full_touch --confirm FIXED_ARUCO_TOUCH
+```
+
+The committed config keeps physical execution disabled by default, so these commands are intentionally not ready to move the robot yet.
 
 ## Restricted ABot-Claw API
 

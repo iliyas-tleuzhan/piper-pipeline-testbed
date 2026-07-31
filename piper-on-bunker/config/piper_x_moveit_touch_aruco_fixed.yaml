@@ -19,20 +19,25 @@ moveit:
 taught_poses:
   home: home
   pre_touch: pre_touch
+  touch: touch
+  retract: retract
   safe_recovery: safe_recovery
   manifest: piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml
 
 motion:
-  touch_direction_ee: [0.0, 0.0, 1.0]
-  press_distance_m: 0.020
+  motion_strategy: taught_joint_sequence
   hold_duration_s: 1.0
-  retract_distance_m: 0.020
   velocity_scaling: 0.05
   acceleration_scaling: 0.05
   planning_timeout_s: 10.0
   execution_timeout_s: 20.0
-  cartesian_fraction_threshold: 1.0
   max_joint_jump_rad: 0.20
+  future_cartesian_mode:
+    enabled: false
+    touch_direction_ee: [0.0, 0.0, 1.0]
+    press_distance_m: 0.020
+    retract_distance_m: 0.020
+    cartesian_fraction_threshold: 1.0
 
 safety:
   max_marker_pose_age_s: 0.5

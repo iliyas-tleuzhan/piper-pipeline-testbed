@@ -53,6 +53,9 @@ class JointStateSnapshot:
     joint_names: list[str]
     positions: list[float]
     age_s: float
+    velocities: list[float] = field(default_factory=list)
+    stamp_s: float | None = None
+    source_topic: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,7 @@ class PlanSummary:
     maximum_joint_delta_rad: float = 0.0
     maximum_adjacent_joint_delta_rad: float = 0.0
     reason: str | None = None
+    execution_capable: bool = False
 
 
 @dataclass(frozen=True)
@@ -88,18 +92,18 @@ class TouchConfig:
     end_effector_link: str
     home_pose_name: str
     pre_touch_pose_name: str
+    touch_pose_name: str
+    retract_pose_name: str
     optional_safe_recovery_pose_name: str | None
     taught_pose_manifest: str
-    touch_direction_ee: list[float]
-    press_distance_m: float
+    motion_strategy: str
     hold_duration_s: float
-    retract_distance_m: float
     velocity_scaling: float
     acceleration_scaling: float
     planning_timeout_s: float
     execution_timeout_s: float
-    cartesian_fraction_threshold: float
     max_joint_jump_rad: float
+    future_cartesian_mode: dict[str, Any]
     max_marker_pose_age_s: float
     max_image_age_s: float
     max_joint_state_age_s: float
@@ -133,18 +137,18 @@ class TouchConfig:
             end_effector_link=str(moveit["end_effector_link"]),
             home_pose_name=str(poses["home"]),
             pre_touch_pose_name=str(poses["pre_touch"]),
+            touch_pose_name=str(poses["touch"]),
+            retract_pose_name=str(poses["retract"]),
             optional_safe_recovery_pose_name=poses.get("safe_recovery"),
             taught_pose_manifest=str(poses["manifest"]),
-            touch_direction_ee=[float(v) for v in motion["touch_direction_ee"]],
-            press_distance_m=float(motion["press_distance_m"]),
+            motion_strategy=str(motion["motion_strategy"]),
             hold_duration_s=float(motion["hold_duration_s"]),
-            retract_distance_m=float(motion["retract_distance_m"]),
             velocity_scaling=float(motion["velocity_scaling"]),
             acceleration_scaling=float(motion["acceleration_scaling"]),
             planning_timeout_s=float(motion["planning_timeout_s"]),
             execution_timeout_s=float(motion["execution_timeout_s"]),
-            cartesian_fraction_threshold=float(motion["cartesian_fraction_threshold"]),
             max_joint_jump_rad=float(motion["max_joint_jump_rad"]),
+            future_cartesian_mode=dict(motion.get("future_cartesian_mode") or {}),
             max_marker_pose_age_s=float(safety["max_marker_pose_age_s"]),
             max_image_age_s=float(safety["max_image_age_s"]),
             max_joint_state_age_s=float(safety["max_joint_state_age_s"]),
@@ -209,6 +213,42 @@ def validate_joint_schema(joint_names: list[str]) -> None:
         raise ValueError(f"expected joint schema {EXPECTED_JOINT_NAMES}, got {joint_names}")
 
 
+def extract_named_joint_state(
+    *,
+    names: list[str],
+    positions: list[float],
+    velocities: list[float] | None,
+    stamp_s: float,
+    now_s: float,
+    expected_names: list[str] | None = None,
+    max_age_s: float = 0.5,
+    max_abs_velocity_rad_s: float = 0.01,
+    source_topic: str = "/joint_states_single",
+) -> JointStateSnapshot:
+    expected = list(expected_names or EXPECTED_JOINT_NAMES)
+    if len(names) != len(set(names)):
+        raise ValueError("joint state contains duplicate joint names")
+    by_name = {str(name): i for i, name in enumerate(names)}
+    missing = [name for name in expected if name not in by_name]
+    if missing:
+        raise ValueError(f"joint state missing expected joints: {missing}")
+    age_s = float(now_s) - float(stamp_s)
+    if age_s < -0.05 or age_s > max_age_s:
+        raise ValueError(f"stale joint state: age {age_s:.3f}s exceeds {max_age_s:.3f}s")
+    mapped_positions = [float(positions[by_name[name]]) for name in expected]
+    if not all(math.isfinite(value) for value in mapped_positions):
+        raise ValueError("joint state contains non-finite position")
+    mapped_velocities: list[float] = []
+    if velocities and len(velocities) >= len(names):
+        mapped_velocities = [float(velocities[by_name[name]]) for name in expected]
+        if not all(math.isfinite(value) for value in mapped_velocities):
+            raise ValueError("joint state contains non-finite velocity")
+        moving = [name for name, value in zip(expected, mapped_velocities) if abs(value) > max_abs_velocity_rad_s]
+        if moving:
+            raise ValueError(f"robot is not stopped; moving joints above {max_abs_velocity_rad_s:.4f} rad/s: {moving}")
+    return JointStateSnapshot(expected, mapped_positions, age_s, mapped_velocities, float(stamp_s), source_topic)
+
+
 def validate_joint_values(joint_names: list[str], positions: list[float], limits: dict[str, list[float]]) -> None:
     validate_joint_schema(joint_names)
     if len(positions) != 6:
@@ -238,13 +278,16 @@ class MoveItTouchBackend(Protocol):
     def plan_joint_pose(self, name: str, pose: TaughtPose, config: TouchConfig) -> PlanSummary:
         ...
 
-    def plan_cartesian_press(self, name: str, direction_ee: list[float], distance_m: float, config: TouchConfig) -> PlanSummary:
-        ...
-
     def execute_plan(self, plan: PlanSummary, timeout_s: float) -> bool:
         ...
 
     def stop(self) -> None:
+        ...
+
+    def wait_until_stopped(self) -> bool:
+        ...
+
+    def check_ready(self) -> dict[str, Any]:
         ...
 
 
@@ -254,13 +297,11 @@ class MockMoveItTouchBackend:
         *,
         marker: MarkerStatus | None = None,
         joint_state: JointStateSnapshot | None = None,
-        cartesian_fraction: float = 1.0,
         max_joint_delta_rad: float = 0.03,
         execute_ok: bool = True,
     ) -> None:
         self.marker = marker or MarkerStatus(True, 6, EXPECTED_MARKER_DICTIONARY, EXPECTED_MARKER_SIZE_M, 0.0, 0.0, 1.0, [6])
         self.joint_state = joint_state or JointStateSnapshot(list(EXPECTED_JOINT_NAMES), [0.0] * 6, 0.0)
-        self.cartesian_fraction = float(cartesian_fraction)
         self.max_joint_delta_rad = float(max_joint_delta_rad)
         self.execute_ok = bool(execute_ok)
         self.executed: list[str] = []
@@ -281,22 +322,13 @@ class MockMoveItTouchBackend:
     def read_marker_status(self) -> MarkerStatus:
         return self.marker
 
+    def check_ready(self) -> dict[str, Any]:
+        return {"ready": True, "backend": "mock_moveit", "planning_only_supported": True}
+
     def plan_joint_pose(self, name: str, pose: TaughtPose, config: TouchConfig) -> PlanSummary:
         current = self.read_joint_state()
         max_delta = max(abs(float(a) - float(b)) for a, b in zip(current.positions, pose.positions))
-        return PlanSummary(name, True, trajectory_points=8, estimated_duration_s=2.0, maximum_joint_delta_rad=max_delta)
-
-    def plan_cartesian_press(self, name: str, direction_ee: list[float], distance_m: float, config: TouchConfig) -> PlanSummary:
-        points = max(2, int(math.ceil(float(distance_m) / 0.005)) + 1)
-        return PlanSummary(
-            name,
-            True,
-            trajectory_points=points,
-            path_fraction=self.cartesian_fraction,
-            estimated_duration_s=max(0.5, float(distance_m) / 0.01),
-            maximum_joint_delta_rad=self.max_joint_delta_rad,
-            maximum_adjacent_joint_delta_rad=self.max_joint_delta_rad / max(1, points - 1),
-        )
+        return PlanSummary(name, True, trajectory_points=8, estimated_duration_s=2.0, maximum_joint_delta_rad=max(max_delta, self.max_joint_delta_rad), execution_capable=True)
 
     def execute_plan(self, plan: PlanSummary, timeout_s: float) -> bool:
         self.executed.append(plan.name)
@@ -304,6 +336,188 @@ class MockMoveItTouchBackend:
 
     def stop(self) -> None:
         self.stopped = True
+
+    def wait_until_stopped(self) -> bool:
+        return True
+
+
+class RosMoveItJointSequenceBackend:
+    """Lazy ROS MoveIt backend for the taught joint-sequence MVP.
+
+    Planning uses moveit_commander when available. The legacy JointMoveitCtrl
+    services are inspected but are not used for planning-only because the
+    observed contract does not prove a no-execution planning mode.
+    """
+
+    JOINT_TOPIC = "/joint_states_single"
+    SERVICE_NAMES = [
+        "/joint_moveit_ctrl_arm",
+        "/joint_moveit_ctrl_endpose",
+        "/joint_moveit_ctrl_gripper",
+        "/joint_moveit_ctrl_piper",
+    ]
+
+    def __init__(self, config: TouchConfig, *, joint_topic: str = "/joint_states_single") -> None:
+        self.config = config
+        self.joint_topic = joint_topic
+        self._last_plan: Any = None
+        try:
+            import rospy
+        except Exception as exc:
+            raise RuntimeError("rospy is unavailable; live MoveIt backend cannot start") from exc
+        self.rospy = rospy
+        if not rospy.get_node_uri():
+            rospy.init_node("piper_x_moveit_aruco_touch", anonymous=True, disable_signals=True)
+
+    def describe(self) -> dict[str, Any]:
+        ready = self.check_ready()
+        return {
+            "backend": "ros_moveit_joint_sequence",
+            "planning_group": self.config.planning_group,
+            "end_effector_link": self.config.end_effector_link,
+            **ready,
+        }
+
+    def check_ready(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "ready": False,
+            "moveit_commander_available": False,
+            "planning_only_supported": False,
+            "services": {},
+            "move_group_available": False,
+            "joint_topic": self.joint_topic,
+        }
+        try:
+            import rosservice
+            for name in self.SERVICE_NAMES:
+                try:
+                    out["services"][name] = rosservice.get_service_type(name)
+                except Exception as exc:
+                    out["services"][name] = f"unavailable: {exc!r}"
+        except Exception as exc:
+            out["service_inspection_error"] = repr(exc)
+        try:
+            import moveit_commander
+
+            moveit_commander.roscpp_initialize([])
+            group = moveit_commander.MoveGroupCommander(self.config.planning_group)
+            out["moveit_commander_available"] = True
+            out["move_group_available"] = True
+            out["planning_frame"] = group.get_planning_frame()
+            out["active_joints"] = list(group.get_active_joints())
+            out["current_end_effector_link"] = getattr(group, "get_end_effector_link", lambda: None)()
+            out["planning_only_supported"] = True
+            out["ready"] = True
+        except Exception as exc:
+            out["moveit_commander_error"] = repr(exc)
+        return out
+
+    def read_joint_state(self) -> JointStateSnapshot:
+        from sensor_msgs.msg import JointState
+
+        msg = self.rospy.wait_for_message(self.joint_topic, JointState, timeout=self.config.max_joint_state_age_s)
+        return extract_named_joint_state(
+            names=list(msg.name),
+            positions=list(msg.position),
+            velocities=list(msg.velocity),
+            stamp_s=float(msg.header.stamp.to_sec()),
+            now_s=float(self.rospy.Time.now().to_sec()),
+            max_age_s=self.config.max_joint_state_age_s,
+            source_topic=self.joint_topic,
+        )
+
+    def read_marker_status(self) -> MarkerStatus:
+        from geometry_msgs.msg import PoseStamped
+
+        dictionary = self.rospy.get_param("/aruco_simple/dictionary", None)
+        marker_id = self.rospy.get_param("/aruco_simple/marker_id", None)
+        marker_size = self.rospy.get_param("/aruco_simple/marker_size", None)
+        try:
+            msg = self.rospy.wait_for_message(self.config.marker_pose_topic, PoseStamped, timeout=self.config.max_marker_pose_age_s)
+            pose_age = float(self.rospy.Time.now().to_sec()) - float(msg.header.stamp.to_sec())
+            visible = pose_age <= self.config.max_marker_pose_age_s
+            return MarkerStatus(
+                visible=visible,
+                marker_id=int(marker_id) if marker_id is not None else None,
+                dictionary=str(dictionary) if dictionary is not None else None,
+                marker_size_m=float(marker_size) if marker_size is not None else None,
+                pose_age_s=pose_age,
+                image_age_s=pose_age,
+                stable_duration_s=self.config.marker_stability_required_s if visible else 0.0,
+                detected_ids=[int(marker_id)] if visible and marker_id is not None else [],
+            )
+        except Exception:
+            return MarkerStatus(False, int(marker_id) if marker_id is not None else None, str(dictionary) if dictionary is not None else None, float(marker_size) if marker_size is not None else None, 999.0, 999.0, 0.0, [])
+
+    def plan_joint_pose(self, name: str, pose: TaughtPose, config: TouchConfig) -> PlanSummary:
+        try:
+            import moveit_commander
+
+            moveit_commander.roscpp_initialize([])
+            group = moveit_commander.MoveGroupCommander(config.planning_group)
+            group.set_max_velocity_scaling_factor(config.velocity_scaling)
+            group.set_max_acceleration_scaling_factor(config.acceleration_scaling)
+            group.set_planning_time(config.planning_timeout_s)
+            if list(group.get_active_joints()) != list(pose.joint_names):
+                return PlanSummary(name, False, 0, reason=f"MoveIt active joints {group.get_active_joints()} do not match taught pose {pose.joint_names}")
+            group.set_joint_value_target(dict(zip(pose.joint_names, pose.positions)))
+            plan_result = group.plan()
+            trajectory = _normalize_moveit_plan(plan_result)
+            points = getattr(getattr(trajectory, "joint_trajectory", None), "points", []) if trajectory is not None else []
+            if not points:
+                return PlanSummary(name, False, 0, reason="MoveIt returned no joint trajectory")
+            self._last_plan = trajectory
+            max_delta = _trajectory_max_joint_delta(points)
+            duration = float(points[-1].time_from_start.to_sec()) if hasattr(points[-1], "time_from_start") else 0.0
+            return PlanSummary(name, True, len(points), estimated_duration_s=duration, maximum_joint_delta_rad=max_delta, execution_capable=True)
+        except Exception as exc:
+            return PlanSummary(name, False, 0, reason=f"MoveIt planning failed: {exc!r}")
+
+    def execute_plan(self, plan: PlanSummary, timeout_s: float) -> bool:
+        if self._last_plan is None:
+            return False
+        try:
+            import moveit_commander
+
+            group = moveit_commander.MoveGroupCommander(self.config.planning_group)
+            return bool(group.execute(self._last_plan, wait=True))
+        except Exception:
+            return False
+
+    def stop(self) -> None:
+        try:
+            import moveit_commander
+
+            group = moveit_commander.MoveGroupCommander(self.config.planning_group)
+            group.stop()
+        except Exception:
+            pass
+
+    def wait_until_stopped(self) -> bool:
+        state = self.read_joint_state()
+        return not state.velocities or max(abs(v) for v in state.velocities) <= 0.01
+
+
+def _normalize_moveit_plan(plan_result: Any) -> Any:
+    if isinstance(plan_result, tuple):
+        if len(plan_result) >= 2 and bool(plan_result[0]):
+            return plan_result[1]
+        if len(plan_result) >= 1:
+            return plan_result[0]
+    return plan_result
+
+
+def _trajectory_max_joint_delta(points: list[Any]) -> float:
+    if not points:
+        return 0.0
+    max_delta = 0.0
+    previous = None
+    for point in points:
+        positions = [float(v) for v in getattr(point, "positions", [])]
+        if previous is not None and positions:
+            max_delta = max(max_delta, max(abs(a - b) for a, b in zip(previous, positions)))
+        previous = positions
+    return max_delta
 
 
 @dataclass
@@ -317,7 +531,7 @@ class TouchMissionResult:
 
 
 class MoveItArucoTouchController:
-    STATES = ["IDLE", "CHECK_MARKER", "MOVE_HOME", "MOVE_PRE_TOUCH", "APPROACH", "TOUCH", "HOLD", "RETRACT", "MOVE_HOME", "COMPLETE"]
+    STATES = ["IDLE", "CHECK_MARKER", "MOVE_HOME", "MOVE_PRE_TOUCH", "MOVE_TOUCH", "HOLD", "MOVE_RETRACT", "MOVE_HOME", "COMPLETE"]
 
     def __init__(
         self,
@@ -334,96 +548,115 @@ class MoveItArucoTouchController:
         self.mission_id = str(uuid.uuid4())
         self.transitions: list[str] = []
 
-    def run(self, *, planning_only: bool = True, execute: bool = False, confirm: str | None = None) -> TouchMissionResult:
+    def run(self, *, planning_only: bool = True, execute: bool = False, confirm: str | None = None, sequence: str = "full_touch") -> TouchMissionResult:
         self.logger.start_mission(self.mission_id)
         physical = bool(execute)
+        if sequence not in {"full_touch", "pre_touch_test"}:
+            return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, f"unknown sequence {sequence}", planning_only, False)
         if physical:
             if planning_only:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "execute cannot be combined with planning_only", planning_only, False)
-            if confirm != "FIXED_ARUCO_TOUCH":
-                return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "physical execution requires --confirm FIXED_ARUCO_TOUCH", planning_only, False)
+            expected_confirm = "PRE_TOUCH_TEST" if sequence == "pre_touch_test" else "FIXED_ARUCO_TOUCH"
+            if confirm != expected_confirm:
+                return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, f"physical execution requires --confirm {expected_confirm}", planning_only, False)
             if not self.config.physical_execution_enabled_by_default:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "physical execution disabled in committed config", planning_only, False)
 
         try:
             self._preflight()
             marker = self._check_marker()
-            plans = []
+            plans: list[PlanSummary] = []
             home = self._pose(self.config.home_pose_name)
             pre_touch = self._pose(self.config.pre_touch_pose_name)
+            touch = self._pose(self.config.touch_pose_name)
+            retract = self._pose(self.config.retract_pose_name)
+            steps = [
+                ("MOVE_HOME", "move_home", home),
+                ("MOVE_PRE_TOUCH", "move_pre_touch", pre_touch),
+            ]
+            if sequence == "full_touch":
+                steps.append(("MOVE_TOUCH", "move_touch", touch))
+            steps.extend(
+                [
+                    ("MOVE_RETRACT", "move_retract", retract),
+                    ("MOVE_HOME", "move_home_final", home),
+                ]
+            )
 
-            for state in ["MOVE_HOME", "MOVE_PRE_TOUCH"]:
-                pose = home if state == "MOVE_HOME" else pre_touch
-                plan = self.backend.plan_joint_pose(state.lower(), pose, self.config)
-                self._validate_plan(plan, require_cartesian=False)
+            for state, plan_name, pose in steps:
+                if state == "MOVE_TOUCH":
+                    marker_before_touch = self._check_marker()
+                    if not marker_before_touch.visible:
+                        return self._fail("MOVE_TOUCH", TouchFailure.MARKER_MISSING, "marker lost before taught touch move", planning_only, physical)
+                    self._transition("OPERATOR_CONFIRMATION_REQUIRED", {"sequence": sequence, "planning_only": planning_only})
+                self._validate_before_movement(pose)
+                plan = self.backend.plan_joint_pose(plan_name, pose, self.config)
+                self._validate_plan(plan)
                 plans.append(plan)
-                self._transition(state, {"plan": plan.__dict__})
+                self._transition(state, {"plan": plan.__dict__, "pose": pose.name})
                 if physical and not self.backend.execute_plan(plan, self.config.execution_timeout_s):
+                    self.backend.stop()
                     return self._fail(state, TouchFailure.EXECUTION_FAILURE, "MoveIt joint plan execution failed", planning_only, True)
+                if state == "MOVE_TOUCH":
+                    self._transition("HOLD", {"hold_duration_s": self.config.hold_duration_s, "contact_inferred": False})
 
-            press = self.backend.plan_cartesian_press("approach_touch", self.config.touch_direction_ee, self.config.press_distance_m, self.config)
-            self._validate_plan(press, require_cartesian=True)
-            plans.append(press)
-            self._transition("APPROACH", {"plan": press.__dict__})
-            marker_before_press = self._check_marker()
-            if not marker_before_press.visible:
-                return self._fail("APPROACH", TouchFailure.MARKER_MISSING, "marker lost before press", planning_only, physical)
-            self._transition("TOUCH", {"press_distance_m": self.config.press_distance_m})
-            if physical and not self.backend.execute_plan(press, self.config.execution_timeout_s):
-                self.backend.stop()
-                return self._fail("TOUCH", TouchFailure.EXECUTION_FAILURE, "MoveIt press execution failed", planning_only, True)
-
-            self._transition("HOLD", {"hold_duration_s": self.config.hold_duration_s})
-
-            retract_vector = build_inverse_press([float(v) * self.config.retract_distance_m for v in self.config.touch_direction_ee])
-            retract = self.backend.plan_cartesian_press("retract_inverse_press", retract_vector, self.config.retract_distance_m, self.config)
-            self._validate_plan(retract, require_cartesian=True)
-            plans.append(retract)
-            self._transition("RETRACT", {"plan": retract.__dict__, "inverse_press_vector": retract_vector})
-            if physical and not self.backend.execute_plan(retract, self.config.execution_timeout_s):
-                self.backend.stop()
-                return self._fail("RETRACT", TouchFailure.EXECUTION_FAILURE, "MoveIt retract execution failed", planning_only, True)
-
-            final_home = self.backend.plan_joint_pose("move_home_final", home, self.config)
-            self._validate_plan(final_home, require_cartesian=False)
-            plans.append(final_home)
-            self._transition("MOVE_HOME", {"plan": final_home.__dict__, "final": True})
-            if physical and not self.backend.execute_plan(final_home, self.config.execution_timeout_s):
-                return self._fail("MOVE_HOME", TouchFailure.EXECUTION_FAILURE, "MoveIt final home execution failed", planning_only, True)
-
-            self._transition("COMPLETE", {"plans": [p.__dict__ for p in plans]})
+            self._transition("COMPLETE", {"plans": [p.__dict__ for p in plans], "sequence": sequence})
             return TouchMissionResult(
                 True,
                 "COMPLETE",
                 None,
                 planning_only=planning_only,
                 physical_motion_performed=physical,
-                outputs=self._report(marker, plans, execution_blocked=not physical),
+                outputs=self._report(marker, plans, execution_blocked=not physical, sequence=sequence),
             )
         except ValueError as exc:
             return self._fail(self.transitions[-1] if self.transitions else "IDLE", str(exc), str(exc), planning_only, False)
 
+    def check_only(self) -> TouchMissionResult:
+        self.logger.start_mission(self.mission_id)
+        try:
+            self._preflight()
+            marker = self._check_marker()
+            return TouchMissionResult(
+                True,
+                "CHECK_MARKER",
+                None,
+                planning_only=True,
+                physical_motion_performed=False,
+                outputs=self._report(marker, [], execution_blocked=True, sequence="check_only"),
+            )
+        except ValueError as exc:
+            return self._fail(self.transitions[-1] if self.transitions else "IDLE", str(exc), str(exc), True, False)
+
     def _preflight(self) -> None:
         self._transition("IDLE", {"backend": self.backend.describe()})
+        ready = self.backend.check_ready()
+        if not ready.get("ready"):
+            raise ValueError(f"MoveIt backend not ready: {ready}")
+        if self.config.motion_strategy != "taught_joint_sequence":
+            raise ValueError("active motion strategy must be taught_joint_sequence")
+        if self.config.future_cartesian_mode.get("enabled"):
+            raise ValueError("future Cartesian mode must remain disabled for v1")
         if self.config.marker_dictionary != EXPECTED_MARKER_DICTIONARY:
             raise ValueError(f"configured marker dictionary must be {EXPECTED_MARKER_DICTIONARY}")
         if self.config.marker_id != EXPECTED_MARKER_ID:
             raise ValueError("configured marker ID must be 6")
         if abs(self.config.marker_size_m - EXPECTED_MARKER_SIZE_M) > 1e-9:
             raise ValueError("configured marker size must be 0.100 m")
-        if self.config.press_distance_m <= 0.0 or self.config.press_distance_m > 0.020:
-            raise ValueError("press distance must be positive and no more than 0.020 m before operator review")
-        if self.config.cartesian_fraction_threshold != 1.0:
-            raise ValueError("fixed MVP requires Cartesian path fraction threshold of 1.0")
         if self.config.velocity_scaling > 0.05 or self.config.acceleration_scaling > 0.05:
             raise ValueError("velocity and acceleration scaling must remain <= 0.05")
+        for pose_name in [self.config.home_pose_name, self.config.pre_touch_pose_name, self.config.touch_pose_name, self.config.retract_pose_name]:
+            pose = self._pose(pose_name)
+            validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits)
+
+    def _validate_before_movement(self, pose: TaughtPose) -> None:
         state = self.backend.read_joint_state()
         if state.age_s > self.config.max_joint_state_age_s:
             raise ValueError(TouchFailure.STALE_JOINT_STATE)
         validate_joint_values(state.joint_names, state.positions, self.config.joint_limits)
-        for pose_name in [self.config.home_pose_name, self.config.pre_touch_pose_name]:
-            pose = self._pose(pose_name)
-            validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits)
+        validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits)
+        if not self.backend.wait_until_stopped():
+            raise ValueError("previous trajectory still active or robot is not stopped")
 
     def _check_marker(self) -> MarkerStatus:
         self._transition("CHECK_MARKER", {})
@@ -448,11 +681,9 @@ class MoveItArucoTouchController:
         validate_joint_schema(pose.joint_names)
         return pose
 
-    def _validate_plan(self, plan: PlanSummary, *, require_cartesian: bool) -> None:
+    def _validate_plan(self, plan: PlanSummary) -> None:
         if not plan.success:
             raise ValueError(plan.reason or TouchFailure.MOVEIT_PLANNING_FAILURE)
-        if require_cartesian and plan.path_fraction < self.config.cartesian_fraction_threshold:
-            raise ValueError(f"Cartesian path fraction {plan.path_fraction:.6f} below required {self.config.cartesian_fraction_threshold:.6f}")
         if plan.maximum_joint_delta_rad > self.config.max_joint_jump_rad:
             raise ValueError(f"joint jump {plan.maximum_joint_delta_rad:.6f} exceeds limit {self.config.max_joint_jump_rad:.6f}")
 
@@ -464,7 +695,7 @@ class MoveItArucoTouchController:
         self.logger.append({"mission_id": self.mission_id, "event": "failure", "state": state, "reason": reason, "message": message})
         return TouchMissionResult(False, state, reason, planning_only, physical_motion_performed, {"message": message, "transitions": self.transitions})
 
-    def _report(self, marker: MarkerStatus, plans: list[PlanSummary], *, execution_blocked: bool) -> dict[str, Any]:
+    def _report(self, marker: MarkerStatus, plans: list[PlanSummary], *, execution_blocked: bool, sequence: str) -> dict[str, Any]:
         backend = self.backend.describe()
         return {
             "mission_id": self.mission_id,
@@ -478,6 +709,8 @@ class MoveItArucoTouchController:
             "piper_x_model_verified": self.config.piper_x_model_verified,
             "marker_status": marker.__dict__,
             "plans": [p.__dict__ for p in plans],
+            "sequence": sequence,
+            "motion_strategy": self.config.motion_strategy,
             "trajectory_points": sum(p.trajectory_points for p in plans),
             "estimated_motion_duration_s": sum(p.estimated_duration_s for p in plans) + self.config.hold_duration_s,
             "maximum_joint_delta_rad": max((p.maximum_joint_delta_rad for p in plans), default=0.0),

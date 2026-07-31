@@ -53,17 +53,43 @@ class PyAgxArmPiperXJointSpaceAdapter:
         self._arm.connect()
         self.connected = True
 
-    def configure_joint_space_stream(self, *, speed_percent: int) -> None:
+    def configure_joint_space_stream(self, *, speed_percent: int, enable_timeout_s: float = 5.0, enable_retry_period_s: float = 0.05) -> None:
         percent = int(speed_percent)
         if percent < 0 or percent > 100:
             raise ValueError("speed percent must be in [0, 100]")
+        if enable_timeout_s < 0.0 or not math.isfinite(float(enable_timeout_s)):
+            raise ValueError("enable timeout must be finite and non-negative")
+        if enable_retry_period_s <= 0.0 or not math.isfinite(float(enable_retry_period_s)):
+            raise ValueError("enable retry period must be finite and positive")
         self._arm.set_follower_mode()
         self._arm.set_speed_percent(percent)
         self._arm.set_motion_mode(PYAGXARM_MOTION_MODE)
-        enabled = self._arm.enable(255)
-        if enabled is False:
-            raise RuntimeError("pyAgxArm enable(255) returned False")
+        deadline = time.monotonic() + float(enable_timeout_s)
+        attempts = 0
+        last_status = None
+        while True:
+            attempts += 1
+            enabled = self._arm.enable(255)
+            if enabled:
+                break
+            last_status = self.get_enable_status()
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    "pyAgxArm enable(255) did not report all joints enabled "
+                    f"within {enable_timeout_s:.2f}s; attempts={attempts}; "
+                    f"last_joint_enable_status={last_status}"
+                )
+            time.sleep(float(enable_retry_period_s))
         self.configured = True
+
+    def get_enable_status(self):
+        getter = getattr(self._arm, "get_joints_enable_status_list", None)
+        if not callable(getter):
+            return "unavailable"
+        try:
+            return list(getter())
+        except Exception as exc:
+            return f"unavailable: {exc!r}"
 
     def write_joints_rad(self, joints_rad: list[float]) -> None:
         values = [float(value) for value in joints_rad]
@@ -110,6 +136,8 @@ class PiperXMoveItSdkTrajectoryController:
         rospy.set_param("~command_rate_hz", float(args.command_rate_hz))
         rospy.set_param("~endpoint_tolerance_rad", float(args.endpoint_tolerance_rad))
         rospy.set_param("~settle_timeout_s", float(args.settle_timeout_s))
+        rospy.set_param("~enable_timeout_s", float(args.enable_timeout_s))
+        rospy.set_param("~enable_retry_period_s", float(args.enable_retry_period_s))
         rospy.loginfo(
             "PiPER-X pyAgxArm MoveIt trajectory controller ready on %s; hardware connects only on first accepted goal",
             args.action_name,
@@ -137,7 +165,11 @@ class PiperXMoveItSdkTrajectoryController:
             raise RuntimeError(f"pyAgxArm connection failure: {exc!r}") from exc
         initial_joints = self._current_positions()
         try:
-            arm.configure_joint_space_stream(speed_percent=int(self.args.speed_percent))
+            arm.configure_joint_space_stream(
+                speed_percent=int(self.args.speed_percent),
+                enable_timeout_s=float(self.args.enable_timeout_s),
+                enable_retry_period_s=float(self.args.enable_retry_period_s),
+            )
         except Exception as exc:
             raise RuntimeError(f"pyAgxArm follower/js/enable initialization failure: {exc!r}") from exc
         try:
@@ -292,6 +324,8 @@ def main() -> int:
     parser.add_argument("--endpoint-tolerance-rad", type=float, default=0.03)
     parser.add_argument("--settle-timeout-s", type=float, default=3.0)
     parser.add_argument("--first-point-blend-s", type=float, default=0.25)
+    parser.add_argument("--enable-timeout-s", type=float, default=5.0)
+    parser.add_argument("--enable-retry-period-s", type=float, default=0.05)
     args = parser.parse_args()
 
     import rospy

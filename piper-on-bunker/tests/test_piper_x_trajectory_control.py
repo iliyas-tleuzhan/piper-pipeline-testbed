@@ -172,11 +172,12 @@ def _load_controller_module():
 
 
 class _FakeArm:
-    def __init__(self, *, fail_connect=False, fail_enable=False, fail_move=False):
+    def __init__(self, *, fail_connect=False, fail_enable=False, fail_move=False, enable_results=None):
         self.calls = []
         self.fail_connect = fail_connect
         self.fail_enable = fail_enable
         self.fail_move = fail_move
+        self.enable_results = list(enable_results) if enable_results is not None else None
 
     def connect(self):
         self.calls.append(("connect",))
@@ -196,7 +197,13 @@ class _FakeArm:
         self.calls.append(("enable", value))
         if self.fail_enable:
             raise RuntimeError("enable failed")
+        if self.enable_results:
+            return self.enable_results.pop(0)
         return True
+
+    def get_joints_enable_status_list(self):
+        self.calls.append(("get_joints_enable_status_list",))
+        return [False, False, False, False, False, False]
 
     def move_js(self, joints):
         self.calls.append(("move_js", list(joints)))
@@ -287,6 +294,24 @@ def test_pyagxarm_adapter_surfaces_connection_enable_and_move_errors(monkeypatch
     adapter = module.PyAgxArmPiperXJointSpaceAdapter("can0")
     with pytest.raises(RuntimeError, match="move failed"):
         adapter.write_joints_rad([0.0] * 6)
+
+
+def test_pyagxarm_adapter_retries_enable_until_true(monkeypatch):
+    module = _load_controller_module()
+    arm = _FakeArm(enable_results=[False, False, True])
+    _install_fake_pyagxarm(monkeypatch, arm)
+    adapter = module.PyAgxArmPiperXJointSpaceAdapter("can0")
+    adapter.configure_joint_space_stream(speed_percent=30, enable_timeout_s=1.0, enable_retry_period_s=0.001)
+    assert [call for call in arm.calls if call == ("enable", 255)] == [("enable", 255)] * 3
+
+
+def test_pyagxarm_adapter_reports_enable_status_on_timeout(monkeypatch):
+    module = _load_controller_module()
+    arm = _FakeArm(enable_results=[False] * 100)
+    _install_fake_pyagxarm(monkeypatch, arm)
+    adapter = module.PyAgxArmPiperXJointSpaceAdapter("can0")
+    with pytest.raises(RuntimeError, match="last_joint_enable_status=\\[False, False, False, False, False, False\\]"):
+        adapter.configure_joint_space_stream(speed_percent=30, enable_timeout_s=0.001, enable_retry_period_s=0.001)
 
 
 def test_controller_source_no_longer_uses_normal_piper_sdk_commands():

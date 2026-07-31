@@ -142,6 +142,8 @@ if rosnode list 2>/dev/null | grep -qx /piper_x_moveit_sdk_trajectory_controller
   echo "speed_percent: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/speed_percent 2>/dev/null || echo unavailable)"
   echo "command_rate_hz: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/command_rate_hz 2>/dev/null || echo unavailable)"
   echo "endpoint_tolerance_rad: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/endpoint_tolerance_rad 2>/dev/null || echo unavailable)"
+  echo "enable_timeout_s: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/enable_timeout_s 2>/dev/null || echo unavailable)"
+  echo "enable_retry_period_s: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/enable_retry_period_s 2>/dev/null || echo unavailable)"
 else
   echo "node: not_ready"
 fi

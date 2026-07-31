@@ -41,6 +41,8 @@ class PiperXFeedbackEvidence:
     source_update_counter: int | None = None
     source_timestamp_s: float | None = None
     source_can_ids: list[int] = field(default_factory=list)
+    source_frame_receive_counters: dict[int, int] = field(default_factory=dict)
+    source_frame_timestamps_s: dict[int, float] = field(default_factory=dict)
     raw_joint_values: list[int] = field(default_factory=list)
     adapter_type: str = "passive_socketcan"
     dependency_repo: str = PIPER_X_DECODER_REPO
@@ -78,6 +80,8 @@ class PiperXFeedbackSample:
             "feedback_age_s": max(0.0, now - float(self.stamp_s)),
             "source_update_counter": self.evidence.source_update_counter,
             "source_can_ids": [hex(v) for v in self.evidence.source_can_ids],
+            "source_frame_receive_counters": {hex(k): int(v) for k, v in sorted(self.evidence.source_frame_receive_counters.items())},
+            "source_frame_timestamps_s": {hex(k): float(v) for k, v in sorted(self.evidence.source_frame_timestamps_s.items())},
             "raw_joint_values": list(self.evidence.raw_joint_values),
             "joint_names": list(self.joint_names),
             "positions_rad": [float(v) for v in self.positions_rad],
@@ -122,7 +126,7 @@ class PassivePiperXSocketcanDecoder:
         self.config = config or PiperXFeedbackConfig()
         self.frames: dict[int, _JointFrame] = {}
         self.receive_counter = 0
-        self._last_complete_counter = 0
+        self._last_consumed_counters: dict[int, int] = {can_id: 0 for can_id in PIPER_X_FEEDBACK_CAN_IDS}
 
     @staticmethod
     def decode_i32_be(data: bytes | bytearray | memoryview) -> int:
@@ -164,26 +168,36 @@ class PassivePiperXSocketcanDecoder:
         now = time.time() if now_s is None else float(now_s)
         if not self.complete(now):
             raise ValueError("incomplete or stale PiPER-X feedback frame set")
-        latest_counter = max(frame.receive_counter for frame in self.frames.values())
-        if latest_counter <= self._last_complete_counter:
-            raise ValueError("no new PiPER-X feedback packet since last sample")
-        self._last_complete_counter = latest_counter
+        frame_counters = {can_id: self.frames[can_id].receive_counter for can_id in PIPER_X_FEEDBACK_CAN_IDS}
+        stale_frame_ids = [
+            can_id
+            for can_id, counter in frame_counters.items()
+            if counter <= self._last_consumed_counters.get(can_id, 0)
+        ]
+        if stale_frame_ids:
+            stale = ", ".join(f"0x{can_id:X}" for can_id in stale_frame_ids)
+            raise ValueError(f"no fresh complete PiPER-X feedback frame set; stale frame IDs: {stale}")
         raw = [0] * 6
         latest_timestamp = 0.0
+        frame_timestamps = {}
         for can_id in PIPER_X_FEEDBACK_CAN_IDS:
             frame = self.frames[can_id]
             raw[frame.first_index] = frame.values_raw[0]
             raw[frame.first_index + 1] = frame.values_raw[1]
             latest_timestamp = max(latest_timestamp, frame.timestamp_s)
+            frame_timestamps[can_id] = frame.timestamp_s
+        self._last_consumed_counters = dict(frame_counters)
         positions = [self.raw_to_rad(value) for value in raw]
         return validate_piper_x_feedback(
             positions,
             PiperXFeedbackEvidence(
                 connected=True,
                 feedback_valid=True,
-                source_update_counter=latest_counter,
+                source_update_counter=max(frame_counters.values()),
                 source_timestamp_s=latest_timestamp,
                 source_can_ids=list(PIPER_X_FEEDBACK_CAN_IDS),
+                source_frame_receive_counters=frame_counters,
+                source_frame_timestamps_s=frame_timestamps,
                 raw_joint_values=raw,
                 real_feedback_packet=True,
                 complete_frame_set=True,
@@ -222,6 +236,10 @@ def validate_piper_x_feedback(
         raise ValueError(f"unexpected PiPER-X feedback CAN IDs: {evidence.source_can_ids}")
     if evidence.source_update_counter is None or evidence.source_timestamp_s is None:
         raise ValueError("PiPER-X feedback evidence requires a real receive counter and timestamp")
+    if sorted(evidence.source_frame_receive_counters) != list(PIPER_X_FEEDBACK_CAN_IDS):
+        raise ValueError("PiPER-X feedback evidence requires per-frame receive counters")
+    if sorted(evidence.source_frame_timestamps_s) != list(PIPER_X_FEEDBACK_CAN_IDS):
+        raise ValueError("PiPER-X feedback evidence requires per-frame receive timestamps")
 
     values = [float(v) for v in values_rad]
     if len(values) != 6:

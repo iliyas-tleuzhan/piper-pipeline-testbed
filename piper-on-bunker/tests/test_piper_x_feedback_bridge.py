@@ -36,14 +36,46 @@ def test_passive_socketcan_feedback_conversion():
     assert sample.positions_rad == pytest.approx([math.radians(v / 1000.0) for v in [1000, 2000, -3000, 4000, 5000, -6000]])
     assert sample.evidence.raw_joint_values == [1000, 2000, -3000, 4000, 5000, -6000]
     assert sample.evidence.source_can_ids == list(PIPER_X_FEEDBACK_CAN_IDS)
+    assert sample.evidence.source_frame_receive_counters == {0x2A5: 1, 0x2A6: 2, 0x2A7: 3}
+    assert sample.evidence.source_frame_timestamps_s == {0x2A5: 10.00, 0x2A6: 10.01, 0x2A7: 10.02}
     assert sample.evidence.tx_frames_sent_by_bridge == 0
 
 
 def test_repeated_sample_without_new_packet_rejected():
     decoder = _complete_decoder()
     decoder.sample(now_s=10.03)
-    with pytest.raises(ValueError, match="no new"):
+    with pytest.raises(ValueError, match="no fresh complete"):
         decoder.sample(now_s=10.04)
+
+
+def test_single_updated_frame_does_not_produce_new_sample():
+    decoder = _complete_decoder()
+    decoder.sample(now_s=10.03)
+    decoder.update_from_can(0x2A5, _frame(1010, 2010), 10.04)
+    with pytest.raises(ValueError, match="stale frame IDs: 0x2A6, 0x2A7"):
+        decoder.sample(now_s=10.05)
+
+
+def test_two_updated_frames_do_not_produce_new_sample():
+    decoder = _complete_decoder()
+    decoder.sample(now_s=10.03)
+    decoder.update_from_can(0x2A5, _frame(1010, 2010), 10.04)
+    decoder.update_from_can(0x2A6, _frame(-3010, 4010), 10.05)
+    with pytest.raises(ValueError, match="stale frame IDs: 0x2A7"):
+        decoder.sample(now_s=10.06)
+
+
+def test_all_three_updated_frames_produce_new_sample():
+    decoder = _complete_decoder()
+    decoder.sample(now_s=10.03)
+    decoder.update_from_can(0x2A5, _frame(1010, 2010), 10.04)
+    decoder.update_from_can(0x2A6, _frame(-3010, 4010), 10.05)
+    decoder.update_from_can(0x2A7, _frame(5010, -6010), 10.06)
+    sample = decoder.sample(now_s=10.07)
+    assert sample.evidence.source_frame_receive_counters == {0x2A5: 4, 0x2A6: 5, 0x2A7: 6}
+    assert sample.positions_rad == pytest.approx(
+        [math.radians(v / 1000.0) for v in [1010, 2010, -3010, 4010, 5010, -6010]]
+    )
 
 
 def test_incomplete_six_joint_frame_set_rejected():
@@ -76,6 +108,8 @@ def test_non_finite_feedback_rejected():
         source_update_counter=1,
         source_timestamp_s=10.0,
         source_can_ids=list(PIPER_X_FEEDBACK_CAN_IDS),
+        source_frame_receive_counters={can_id: index + 1 for index, can_id in enumerate(PIPER_X_FEEDBACK_CAN_IDS)},
+        source_frame_timestamps_s={can_id: 10.0 for can_id in PIPER_X_FEEDBACK_CAN_IDS},
         raw_joint_values=[0] * 6,
         real_feedback_packet=True,
         complete_frame_set=True,
@@ -92,6 +126,8 @@ def test_communication_failure_rejected():
         source_update_counter=1,
         source_timestamp_s=10.0,
         source_can_ids=list(PIPER_X_FEEDBACK_CAN_IDS),
+        source_frame_receive_counters={can_id: index + 1 for index, can_id in enumerate(PIPER_X_FEEDBACK_CAN_IDS)},
+        source_frame_timestamps_s={can_id: 10.0 for can_id in PIPER_X_FEEDBACK_CAN_IDS},
         raw_joint_values=[0] * 6,
         real_feedback_packet=True,
         complete_frame_set=True,
@@ -108,6 +144,8 @@ def test_all_zero_data_requires_complete_current_frame_set():
         source_update_counter=1,
         source_timestamp_s=10.0,
         source_can_ids=list(PIPER_X_FEEDBACK_CAN_IDS),
+        source_frame_receive_counters={can_id: index + 1 for index, can_id in enumerate(PIPER_X_FEEDBACK_CAN_IDS)},
+        source_frame_timestamps_s={can_id: 10.0 for can_id in PIPER_X_FEEDBACK_CAN_IDS},
         raw_joint_values=[],
         real_feedback_packet=True,
         complete_frame_set=False,

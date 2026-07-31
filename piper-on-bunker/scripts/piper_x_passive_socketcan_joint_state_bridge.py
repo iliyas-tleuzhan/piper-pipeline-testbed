@@ -73,9 +73,10 @@ def main() -> int:
 
     publish_period_s = 1.0 / args.rate_hz if args.rate_hz > 0.0 else 0.0
     last_publish_s = 0.0
+    last_valid_payload: dict | None = None
 
     def handle_message(message, *, force_publish: bool = False) -> dict | None:
-        nonlocal last_publish_s
+        nonlocal last_publish_s, last_valid_payload
         timestamp = float(getattr(message, "timestamp", 0.0) or time.time())
         updated = decoder.update_from_can(int(message.arbitration_id), bytes(message.data), timestamp)
         if not updated:
@@ -93,6 +94,7 @@ def main() -> int:
         joint_pub.publish(msg)
         payload = sample.to_status_dict()
         status_pub.publish(String(data=json.dumps(payload, sort_keys=True)))
+        last_valid_payload = payload
         last_publish_s = now_s
         return payload
 
@@ -107,7 +109,11 @@ def main() -> int:
                     payload = handle_message(message, force_publish=args.once)
                 except ValueError as exc:
                     last_error = str(exc)
-                    status_pub.publish(String(data=status_json(None, last_error)))
+                    if (
+                        not last_error.startswith("no fresh complete PiPER-X feedback frame set")
+                        or last_valid_payload is None
+                    ):
+                        status_pub.publish(String(data=status_json(None, last_error)))
                 else:
                     if payload is not None:
                         if args.once:

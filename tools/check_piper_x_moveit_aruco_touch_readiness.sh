@@ -76,13 +76,41 @@ python3 piper-on-bunker/scripts/inspect_piper_x_moveit_pose.py \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
   --positions "0,0,0,0,0,0" >/tmp/piper_x_moveit_pose_offline_check.json
 
-for pose in home pre_touch touch retract; do
-  if grep -q "\"$pose\"" piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml 2>/dev/null; then
-    echo "taught_$pose: exists"
-  else
-    echo "taught_$pose: missing"
-  fi
-done
+python3 - <<'PY'
+from pathlib import Path
+
+import yaml
+
+manifest = Path("piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml")
+required = ["home", "pre_touch", "touch", "retract"]
+expected_joints = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
+if not manifest.exists():
+    for pose in required:
+        print(f"taught_{pose}: missing")
+    raise SystemExit(0)
+
+try:
+    data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+except Exception as exc:
+    for pose in required:
+        print(f"taught_{pose}: invalid_manifest ({exc!r})")
+    raise SystemExit(0)
+
+poses = data.get("poses") or {}
+for pose in required:
+    payload = poses.get(pose)
+    if not payload:
+        print(f"taught_{pose}: missing")
+        continue
+    names = list(payload.get("joint_names") or [])
+    positions = list(payload.get("positions") or [])
+    if names != expected_joints:
+        print(f"taught_{pose}: invalid_joint_schema ({names})")
+    elif len(positions) != 6:
+        print(f"taught_{pose}: invalid_position_count ({len(positions)})")
+    else:
+        print(f"taught_{pose}: exists")
+PY
 
 echo "physical_execution_enabled: false (committed config default)"
 echo "rejected_handeye_transform_used_for_targeting: false"

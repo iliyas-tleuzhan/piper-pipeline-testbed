@@ -17,6 +17,7 @@
 
   <param name="/piper_x_moveit/model_source" value="agx_arm_description piper_x_with_gripper_description.xacro"/>
   <param name="/piper_x_moveit/model_verified" value="false"/>
+  <param name="/piper_x_moveit/model_bounds_override" value="joint3 upper bound is widened in the runtime-staged URDF for small encoder/model zero tolerance; PiPER-X FK remains unverified"/>
   <param name="/piper_x_moveit/physical_execution_blocked_reason" value="PiPER-X URDF/FK is not yet verified against the physical arm"/>
 
   <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" output="screen"/>

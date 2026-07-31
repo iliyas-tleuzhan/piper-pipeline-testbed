@@ -84,6 +84,7 @@ PY
 )"
 echo "piper_x_moveit_model_source: $(rosparam get /piper_x_moveit/model_source 2>/dev/null || echo unavailable)"
 echo "piper_x_moveit_model_verified: $(rosparam get /piper_x_moveit/model_verified 2>/dev/null || echo unavailable)"
+echo "piper_x_moveit_model_bounds_override: $(rosparam get /piper_x_moveit/model_bounds_override 2>/dev/null || echo unavailable)"
 echo "piper_x_physical_execution_blocked_reason: $(rosparam get /piper_x_moveit/physical_execution_blocked_reason 2>/dev/null || echo unavailable)"
 '
 

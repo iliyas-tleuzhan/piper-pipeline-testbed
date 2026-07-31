@@ -9,6 +9,7 @@ MARKER_SIZE_M=${MARKER_SIZE_M:-0.100}
 CAMERA_SERIAL=${CAMERA_SERIAL:-243322074578}
 AGX_ARM_URDF_HOST=${AGX_ARM_URDF_HOST:-/home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf}
 STAGED_ROS_PKGS=${STAGED_ROS_PKGS:-/tmp/piper_x_moveit_ros}
+PIPER_X_JOINT3_UPPER_OVERRIDE_RAD=${PIPER_X_JOINT3_UPPER_OVERRIDE_RAD:-0.02}
 
 cd "$(dirname "$0")/.."
 
@@ -34,6 +35,26 @@ docker exec -i "$CONTAINER" bash -lc "cat > '$STAGED_ROS_PKGS/agx_arm_descriptio
   <license>Proprietary</license>
 </package>
 XML
+python3 - <<PY
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+path = Path('$STAGED_ROS_PKGS/agx_arm_description/agx_arm_urdf/piper_x/urdf/piper_x_description.urdf')
+tree = ET.parse(path)
+root = tree.getroot()
+for joint in root.findall('joint'):
+    if joint.attrib.get('name') == 'joint3':
+        limit = joint.find('limit')
+        if limit is None:
+            raise SystemExit('joint3 has no limit tag')
+        old_upper = limit.attrib.get('upper')
+        limit.set('upper', '$PIPER_X_JOINT3_UPPER_OVERRIDE_RAD')
+        print(f'Applied unverified PiPER-X MoveIt bounds override: joint3 upper {old_upper} -> {limit.attrib[\"upper\"]} rad')
+        break
+else:
+    raise SystemExit('joint3 not found in staged PiPER-X URDF')
+tree.write(path, encoding='unicode')
+PY
 sha256sum '$STAGED_ROS_PKGS/agx_arm_description/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro'"
 
 docker exec -i "$CONTAINER" bash -lc 'ip link set can0 down >/dev/null 2>&1 || true; ip link set can0 type can bitrate 1000000 >/dev/null 2>&1 || true; ip link set can0 txqueuelen 1000 >/dev/null 2>&1 || true; ip link set can0 up >/dev/null 2>&1 || true'
@@ -120,6 +141,7 @@ echo "Started tmux session: $SESSION"
 echo "No OpenPI, VLA, Bunker navigation, mission execution, or rejected hand-eye publisher was started."
 echo "PiPER driver auto_enable:=false"
 echo "MoveIt model: PiPER-X staged from $AGX_ARM_URDF_HOST/piper_x"
+echo "MoveIt bounds override: joint3 upper -> $PIPER_X_JOINT3_UPPER_OVERRIDE_RAD rad in staged URDF only"
 echo "PiPER-X FK/model verification: false; physical execution remains blocked"
 echo "Marker contract: $MARKER_DICTIONARY ID $MARKER_ID size $MARKER_SIZE_M m"
 echo

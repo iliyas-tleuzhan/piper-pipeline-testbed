@@ -337,7 +337,9 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
         raise RuntimeError("vertical alignment did not converge before max_alignment_iterations")
 
     total_forward = 0.0
-    for index in range(config.continuous_max_forward_steps):
+    index = 0
+    while not rospy.is_shutdown():
+        index += 1
         report, estimate = _capture_estimate(config)
         estimates.append(report)
         blockers = _execution_blockers(config, estimate, allow_not_centered=True)
@@ -347,12 +349,8 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
         if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
             actions.append({"name": "forward_stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
             break
-        remaining = max(0.0, config.continuous_max_forward_m - total_forward)
-        if remaining <= 1e-6:
-            actions.append({"name": "forward_stop_total_cap_reached", "total_forward_m": total_forward})
-            break
-        step_mag = min(config.simple_forward_step_m, remaining)
-        action = _execute_world_delta(group, config, name=f"forward_hold_height_step_{index + 1}", delta_world_m=_normalized_forward(config, step_mag))
+        step_mag = config.simple_forward_step_m
+        action = _execute_world_delta(group, config, name=f"forward_hold_height_step_{index}", delta_world_m=_normalized_forward(config, step_mag))
         action["forward_component_m"] = step_mag
         action["depth_m"] = depth
         action["height_change_m"] = 0.0

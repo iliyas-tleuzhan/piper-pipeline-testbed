@@ -105,6 +105,18 @@ class PlanSummary:
     reason: str | None = None
     execution_capable: bool = False
     metrics: dict[str, Any] | None = None
+    start_pose_name: str | None = None
+    target_pose_name: str | None = None
+    motion_profile_name: str | None = None
+    velocity_scaling: float | None = None
+    acceleration_scaling: float | None = None
+    duration_limit_s: float | None = None
+    duration_gate_passed: bool | None = None
+    per_joint_total_displacement_rad: dict[str, float] | None = None
+    largest_displacement_joint: str | None = None
+    largest_displacement_rad: float | None = None
+    large_displacement_review_required: bool = False
+    effective_joint_velocity_limits_rad_s: dict[str, float | None] | None = None
 
 
 @dataclass(frozen=True)
@@ -118,6 +130,7 @@ class TouchConfig:
     marker_pose_topic: str
     planning_group: str
     end_effector_link: str
+    staging_pose_name: str
     home_pose_name: str
     pre_touch_pose_name: str
     touch_pose_name: str
@@ -128,12 +141,16 @@ class TouchConfig:
     hold_duration_s: float
     velocity_scaling: float
     acceleration_scaling: float
+    motion_profiles: dict[str, dict[str, float]]
+    segment_duration_limits_s: dict[str, float]
+    large_pose_delta_review_threshold_rad: float
     planning_timeout_s: float
     execution_timeout_s: float
     max_joint_jump_rad: float
     max_adjacent_joint_delta_rad: float
     max_segment_duration_s: float
     max_mission_duration_s: float
+    home_transit_diagnostic_max_mission_duration_s: float
     min_effective_joint_velocity_rad_s: float
     max_target_error_rad: float
     continuity_tolerance_rad: float
@@ -170,6 +187,7 @@ class TouchConfig:
             marker_pose_topic=str(camera["marker_pose_topic"]),
             planning_group=str(moveit["planning_group"]),
             end_effector_link=str(moveit["end_effector_link"]),
+            staging_pose_name=str(poses.get("staging", "staging")),
             home_pose_name=str(poses["home"]),
             pre_touch_pose_name=str(poses["pre_touch"]),
             touch_pose_name=str(poses["touch"]),
@@ -178,14 +196,26 @@ class TouchConfig:
             taught_pose_manifest=str(poses["manifest"]),
             motion_strategy=str(motion["motion_strategy"]),
             hold_duration_s=float(motion["hold_duration_s"]),
-            velocity_scaling=float(motion["velocity_scaling"]),
-            acceleration_scaling=float(motion["acceleration_scaling"]),
+            velocity_scaling=float(motion.get("velocity_scaling", motion.get("motion_profiles", {}).get("approach", {}).get("velocity_scaling", 0.05))),
+            acceleration_scaling=float(motion.get("acceleration_scaling", motion.get("motion_profiles", {}).get("approach", {}).get("acceleration_scaling", 0.05))),
+            motion_profiles={
+                str(name): {
+                    "velocity_scaling": float(payload["velocity_scaling"]),
+                    "acceleration_scaling": float(payload["acceleration_scaling"]),
+                }
+                for name, payload in (motion.get("motion_profiles") or {
+                    "approach": {"velocity_scaling": motion.get("velocity_scaling", 0.05), "acceleration_scaling": motion.get("acceleration_scaling", 0.05)}
+                }).items()
+            },
+            segment_duration_limits_s={str(k): float(v) for k, v in (motion.get("segment_duration_limits_s") or {}).items()},
+            large_pose_delta_review_threshold_rad=float(motion.get("large_pose_delta_review_threshold_rad", 1.0)),
             planning_timeout_s=float(motion["planning_timeout_s"]),
             execution_timeout_s=float(motion["execution_timeout_s"]),
             max_joint_jump_rad=float(motion["max_joint_jump_rad"]),
             max_adjacent_joint_delta_rad=float(motion.get("max_adjacent_joint_delta_rad", motion["max_joint_jump_rad"])),
             max_segment_duration_s=float(motion.get("max_segment_duration_s", 30.0)),
             max_mission_duration_s=float(motion.get("max_mission_duration_s", 120.0)),
+            home_transit_diagnostic_max_mission_duration_s=float(motion.get("home_transit_diagnostic_max_mission_duration_s", 240.0)),
             min_effective_joint_velocity_rad_s=float(motion.get("min_effective_joint_velocity_rad_s", 0.001)),
             max_target_error_rad=float(motion.get("max_target_error_rad", 0.02)),
             continuity_tolerance_rad=float(motion.get("continuity_tolerance_rad", 1e-3)),
@@ -320,7 +350,15 @@ class MoveItTouchBackend(Protocol):
     def read_marker_status(self) -> MarkerStatus:
         ...
 
-    def plan_joint_pose(self, name: str, pose: TaughtPose, config: TouchConfig, *, start_state: JointStateSnapshot) -> PlanSummary:
+    def plan_joint_pose(
+        self,
+        name: str,
+        pose: TaughtPose,
+        config: TouchConfig,
+        *,
+        start_state: JointStateSnapshot,
+        motion_profile: dict[str, float],
+    ) -> PlanSummary:
         ...
 
     def publish_plans_to_rviz(self) -> bool:
@@ -388,7 +426,15 @@ class MockMoveItTouchBackend:
             },
         }
 
-    def plan_joint_pose(self, name: str, pose: TaughtPose, config: TouchConfig, *, start_state: JointStateSnapshot) -> PlanSummary:
+    def plan_joint_pose(
+        self,
+        name: str,
+        pose: TaughtPose,
+        config: TouchConfig,
+        *,
+        start_state: JointStateSnapshot,
+        motion_profile: dict[str, float],
+    ) -> PlanSummary:
         metrics = linear_trajectory_metrics(
             joint_names=list(pose.joint_names),
             start_positions=list(start_state.positions),
@@ -410,6 +456,8 @@ class MockMoveItTouchBackend:
             maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
             execution_capable=True,
             metrics=_metrics_to_dict(metrics),
+            velocity_scaling=float(motion_profile["velocity_scaling"]),
+            acceleration_scaling=float(motion_profile["acceleration_scaling"]),
         )
 
     def execute_plan(self, plan: PlanSummary, timeout_s: float) -> bool:
@@ -522,7 +570,7 @@ class RosMoveItJointSequenceBackend:
             }
         return out
 
-    def _get_group(self) -> Any:
+    def _get_group(self, *, motion_profile: dict[str, float] | None = None) -> Any:
         if self._group is None:
             import moveit_commander
 
@@ -530,8 +578,9 @@ class RosMoveItJointSequenceBackend:
             self._moveit_commander = moveit_commander
             self._group = moveit_commander.MoveGroupCommander(self.config.planning_group)
         group = self._group
-        group.set_max_velocity_scaling_factor(self.config.velocity_scaling)
-        group.set_max_acceleration_scaling_factor(self.config.acceleration_scaling)
+        profile = motion_profile or {"velocity_scaling": self.config.velocity_scaling, "acceleration_scaling": self.config.acceleration_scaling}
+        group.set_max_velocity_scaling_factor(float(profile["velocity_scaling"]))
+        group.set_max_acceleration_scaling_factor(float(profile["acceleration_scaling"]))
         group.set_planning_time(self.config.planning_timeout_s)
         return group
 
@@ -583,9 +632,17 @@ class RosMoveItJointSequenceBackend:
         except Exception:
             return MarkerStatus(False, int(marker_id) if marker_id is not None else None, str(dictionary) if dictionary is not None else None, float(marker_size) if marker_size is not None else None, 999.0, 999.0, 0.0, [])
 
-    def plan_joint_pose(self, name: str, pose: TaughtPose, config: TouchConfig, *, start_state: JointStateSnapshot) -> PlanSummary:
+    def plan_joint_pose(
+        self,
+        name: str,
+        pose: TaughtPose,
+        config: TouchConfig,
+        *,
+        start_state: JointStateSnapshot,
+        motion_profile: dict[str, float],
+    ) -> PlanSummary:
         try:
-            group = self._get_group()
+            group = self._get_group(motion_profile=motion_profile)
             if list(group.get_active_joints()) != list(pose.joint_names):
                 return PlanSummary(name, False, 0, reason=f"MoveIt active joints {group.get_active_joints()} do not match taught pose {pose.joint_names}")
             group.set_start_state(self._robot_state_from_snapshot(start_state))
@@ -611,6 +668,8 @@ class RosMoveItJointSequenceBackend:
                 maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
                 execution_capable=True,
                 metrics=_metrics_to_dict(metrics),
+                velocity_scaling=float(motion_profile["velocity_scaling"]),
+                acceleration_scaling=float(motion_profile["acceleration_scaling"]),
             )
         except Exception as exc:
             return PlanSummary(name, False, 0, reason=f"MoveIt planning failed: {exc!r}")
@@ -851,7 +910,7 @@ class TouchMissionResult:
 
 
 class MoveItArucoTouchController:
-    STATES = ["IDLE", "CHECK_MARKER", "MOVE_HOME", "MOVE_PRE_TOUCH", "MOVE_TOUCH", "HOLD", "MOVE_RETRACT", "MOVE_HOME", "COMPLETE"]
+    STATES = ["IDLE", "CHECK_MARKER", "MOVE_STAGING", "MOVE_PRE_TOUCH", "MOVE_TOUCH", "HOLD", "MOVE_RETRACT", "MOVE_STAGING", "COMPLETE"]
 
     def __init__(
         self,
@@ -869,6 +928,7 @@ class MoveItArucoTouchController:
         self.transitions: list[str] = []
         self._partial_plans: list[PlanSummary] = []
         self._last_rviz_published = False
+        self._backend_ready: dict[str, Any] = {}
 
     def run(
         self,
@@ -876,58 +936,54 @@ class MoveItArucoTouchController:
         planning_only: bool = True,
         execute: bool = False,
         confirm: str | None = None,
-        sequence: str = "full_touch",
+        sequence: str = "fixed_touch",
         publish_plans_to_rviz: bool = False,
     ) -> TouchMissionResult:
         self.logger.start_mission(self.mission_id)
         physical = bool(execute)
-        if sequence not in {"full_touch", "pre_touch_test"}:
+        if sequence not in {"staging_test", "fixed_touch", "home_transit_diagnostic"}:
             return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, f"unknown sequence {sequence}", planning_only, False)
         if physical:
             if planning_only:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "execute cannot be combined with planning_only", planning_only, False)
-            expected_confirm = "PRE_TOUCH_TEST" if sequence == "pre_touch_test" else "FIXED_ARUCO_TOUCH"
+            expected_confirm = "STAGING_TEST" if sequence == "staging_test" else "FIXED_ARUCO_TOUCH"
             if confirm != expected_confirm:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, f"physical execution requires --confirm {expected_confirm}", planning_only, False)
+            if sequence == "home_transit_diagnostic":
+                return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "home_transit_diagnostic is planning-only until separately verified", planning_only, False)
             if not self.config.physical_execution_enabled_by_default:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "physical execution disabled in committed config", planning_only, False)
             if not self.config.piper_x_model_verified:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "PiPER-X model/FK is not verified; physical execution remains blocked", planning_only, False)
 
         try:
-            self._preflight(require_taught_poses=True)
+            self._preflight(require_taught_poses=True, sequence=sequence)
             marker = self._check_marker()
             plans: list[PlanSummary] = []
             planned_state = self._read_and_validate_current_state()
-            home = self._pose(self.config.home_pose_name)
-            pre_touch = self._pose(self.config.pre_touch_pose_name)
-            touch = self._pose(self.config.touch_pose_name)
-            retract = self._pose(self.config.retract_pose_name)
-            steps = [
-                ("MOVE_HOME", "move_home", home),
-                ("MOVE_PRE_TOUCH", "move_pre_touch", pre_touch),
-            ]
-            if sequence == "full_touch":
-                steps.append(("MOVE_TOUCH", "move_touch", touch))
-            steps.extend(
-                [
-                    ("MOVE_RETRACT", "move_retract", retract),
-                    ("MOVE_HOME", "move_home_final", home),
-                ]
-            )
+            planned_state_label = "current_state"
+            steps = self._sequence_steps(sequence)
 
-            for state, plan_name, pose in steps:
+            for step in steps:
+                state = step["state"]
+                plan_name = step["plan_name"]
+                pose = self._pose(step["target_pose_name"])
+                motion_profile_name = step["motion_profile_name"]
+                motion_profile = self._motion_profile(motion_profile_name)
+                duration_limit_s = self._duration_limit(plan_name)
                 if state == "MOVE_TOUCH":
                     marker_before_touch = self._check_marker()
                     if not marker_before_touch.visible:
                         return self._fail("MOVE_TOUCH", TouchFailure.MARKER_MISSING, "marker lost before taught touch move", planning_only, physical)
                     self._transition("OPERATOR_CONFIRMATION_REQUIRED", {"sequence": sequence, "planning_only": planning_only})
                 self._validate_movement_inputs(pose, planned_state)
-                plan = self.backend.plan_joint_pose(plan_name, pose, self.config, start_state=planned_state)
+                plan = self.backend.plan_joint_pose(plan_name, pose, self.config, start_state=planned_state, motion_profile=motion_profile)
+                plan = self._annotate_plan(plan, step, planned_state, planned_state_label, pose, motion_profile, duration_limit_s)
                 self._partial_plans.append(plan)
-                self._validate_plan(plan)
+                self._validate_plan(plan, duration_limit_s=duration_limit_s)
                 plans.append(plan)
                 planned_state = self._state_from_plan(plan)
+                planned_state_label = step["target_pose_name"]
                 self._transition(state, {"plan": plan.__dict__, "pose": pose.name})
                 if physical and not self.backend.execute_plan(plan, self.config.execution_timeout_s):
                     self.backend.stop()
@@ -935,7 +991,7 @@ class MoveItArucoTouchController:
                 if state == "MOVE_TOUCH":
                     self._transition("HOLD", {"hold_duration_s": self.config.hold_duration_s, "contact_inferred": False})
 
-            self._validate_mission_duration(plans)
+            self._validate_mission_duration(plans, sequence=sequence)
             rviz_published = False
             if publish_plans_to_rviz:
                 rviz_published = bool(self.backend.publish_plans_to_rviz())
@@ -957,7 +1013,7 @@ class MoveItArucoTouchController:
     def check_only(self) -> TouchMissionResult:
         self.logger.start_mission(self.mission_id)
         try:
-            self._preflight(require_taught_poses=False)
+            self._preflight(require_taught_poses=False, sequence="check_only")
             marker = self._check_marker()
             return TouchMissionResult(
                 True,
@@ -970,9 +1026,10 @@ class MoveItArucoTouchController:
         except ValueError as exc:
             return self._fail(self.transitions[-1] if self.transitions else "IDLE", str(exc), str(exc), True, False)
 
-    def _preflight(self, *, require_taught_poses: bool = True) -> None:
+    def _preflight(self, *, require_taught_poses: bool = True, sequence: str = "fixed_touch") -> None:
         self._transition("IDLE", {"backend": self.backend.describe()})
         ready = self.backend.check_ready()
+        self._backend_ready = ready
         if not ready.get("ready"):
             raise ValueError(f"MoveIt backend not ready: {ready}")
         if self.config.motion_strategy != "taught_joint_sequence":
@@ -988,9 +1045,56 @@ class MoveItArucoTouchController:
         if self.config.velocity_scaling > 0.05 or self.config.acceleration_scaling > 0.05:
             raise ValueError("velocity and acceleration scaling must remain <= 0.05")
         if require_taught_poses:
-            for pose_name in [self.config.home_pose_name, self.config.pre_touch_pose_name, self.config.touch_pose_name, self.config.retract_pose_name]:
+            for pose_name in self._required_pose_names(sequence):
                 pose = self._pose(pose_name)
                 validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits, tolerance_rad=self.config.taught_pose_limit_tolerance_rad)
+        for name, profile in self.config.motion_profiles.items():
+            if float(profile["velocity_scaling"]) > 0.10 or float(profile["acceleration_scaling"]) > 0.10:
+                raise ValueError(f"motion profile {name} scaling must remain <= 0.10")
+            if float(profile["velocity_scaling"]) <= 0.0 or float(profile["acceleration_scaling"]) <= 0.0:
+                raise ValueError(f"motion profile {name} scaling must be positive")
+
+    def _required_pose_names(self, sequence: str) -> list[str]:
+        if sequence == "staging_test":
+            return [self.config.staging_pose_name, self.config.pre_touch_pose_name, self.config.retract_pose_name]
+        if sequence == "fixed_touch":
+            return [self.config.staging_pose_name, self.config.pre_touch_pose_name, self.config.touch_pose_name, self.config.retract_pose_name]
+        if sequence == "home_transit_diagnostic":
+            return [self.config.home_pose_name, self.config.pre_touch_pose_name, self.config.retract_pose_name]
+        return []
+
+    def _sequence_steps(self, sequence: str) -> list[dict[str, str]]:
+        if sequence == "staging_test":
+            return [
+                {"state": "MOVE_STAGING", "plan_name": "move_staging", "target_pose_name": self.config.staging_pose_name, "motion_profile_name": "transit"},
+                {"state": "MOVE_PRE_TOUCH", "plan_name": "move_pre_touch", "target_pose_name": self.config.pre_touch_pose_name, "motion_profile_name": "approach"},
+                {"state": "MOVE_RETRACT", "plan_name": "move_retract", "target_pose_name": self.config.retract_pose_name, "motion_profile_name": "retract"},
+                {"state": "MOVE_STAGING", "plan_name": "move_staging_final", "target_pose_name": self.config.staging_pose_name, "motion_profile_name": "transit"},
+            ]
+        if sequence == "fixed_touch":
+            return [
+                {"state": "MOVE_STAGING", "plan_name": "move_staging", "target_pose_name": self.config.staging_pose_name, "motion_profile_name": "transit"},
+                {"state": "MOVE_PRE_TOUCH", "plan_name": "move_pre_touch", "target_pose_name": self.config.pre_touch_pose_name, "motion_profile_name": "approach"},
+                {"state": "MOVE_TOUCH", "plan_name": "move_touch", "target_pose_name": self.config.touch_pose_name, "motion_profile_name": "touch"},
+                {"state": "MOVE_RETRACT", "plan_name": "move_retract", "target_pose_name": self.config.retract_pose_name, "motion_profile_name": "retract"},
+                {"state": "MOVE_STAGING", "plan_name": "move_staging_final", "target_pose_name": self.config.staging_pose_name, "motion_profile_name": "transit"},
+            ]
+        if sequence == "home_transit_diagnostic":
+            return [
+                {"state": "MOVE_HOME", "plan_name": "move_home", "target_pose_name": self.config.home_pose_name, "motion_profile_name": "transit"},
+                {"state": "MOVE_PRE_TOUCH", "plan_name": "move_pre_touch", "target_pose_name": self.config.pre_touch_pose_name, "motion_profile_name": "approach"},
+                {"state": "MOVE_RETRACT", "plan_name": "move_retract", "target_pose_name": self.config.retract_pose_name, "motion_profile_name": "retract"},
+                {"state": "MOVE_HOME", "plan_name": "move_home_final", "target_pose_name": self.config.home_pose_name, "motion_profile_name": "transit"},
+            ]
+        raise ValueError(f"unknown sequence {sequence}")
+
+    def _motion_profile(self, name: str) -> dict[str, float]:
+        if name not in self.config.motion_profiles:
+            raise ValueError(f"missing motion profile: {name}")
+        return self.config.motion_profiles[name]
+
+    def _duration_limit(self, plan_name: str) -> float:
+        return float(self.config.segment_duration_limits_s.get(plan_name, self.config.max_segment_duration_s))
 
     def _read_and_validate_current_state(self) -> JointStateSnapshot:
         state = self.backend.read_joint_state()
@@ -1028,7 +1132,60 @@ class MoveItArucoTouchController:
         validate_joint_schema(pose.joint_names)
         return pose
 
-    def _validate_plan(self, plan: PlanSummary) -> None:
+    def _annotate_plan(
+        self,
+        plan: PlanSummary,
+        step: dict[str, str],
+        start_state: JointStateSnapshot,
+        start_pose_name: str,
+        target_pose: TaughtPose,
+        motion_profile: dict[str, float],
+        duration_limit_s: float,
+    ) -> PlanSummary:
+        per_joint = {
+            name: abs(float(target) - float(start))
+            for name, start, target in zip(target_pose.joint_names, start_state.positions, target_pose.positions)
+        }
+        largest_joint = max(per_joint, key=per_joint.get) if per_joint else None
+        largest_delta = per_joint[largest_joint] if largest_joint is not None else 0.0
+        duration = plan.estimated_duration_s
+        if plan.metrics:
+            duration = float(plan.metrics.get("total_duration_s", duration))
+        return PlanSummary(
+            name=plan.name,
+            success=plan.success,
+            trajectory_points=plan.trajectory_points,
+            path_fraction=plan.path_fraction,
+            estimated_duration_s=plan.estimated_duration_s,
+            maximum_joint_delta_rad=plan.maximum_joint_delta_rad,
+            maximum_adjacent_joint_delta_rad=plan.maximum_adjacent_joint_delta_rad,
+            reason=plan.reason,
+            execution_capable=plan.execution_capable,
+            metrics=plan.metrics,
+            start_pose_name=start_pose_name,
+            target_pose_name=step["target_pose_name"],
+            motion_profile_name=step["motion_profile_name"],
+            velocity_scaling=float(motion_profile["velocity_scaling"]),
+            acceleration_scaling=float(motion_profile["acceleration_scaling"]),
+            duration_limit_s=float(duration_limit_s),
+            duration_gate_passed=duration <= duration_limit_s,
+            per_joint_total_displacement_rad=per_joint,
+            largest_displacement_joint=largest_joint,
+            largest_displacement_rad=largest_delta,
+            large_displacement_review_required=largest_delta > self.config.large_pose_delta_review_threshold_rad,
+            effective_joint_velocity_limits_rad_s=self._effective_velocity_limits_for_profile(motion_profile),
+        )
+
+    def _effective_velocity_limits_for_profile(self, motion_profile: dict[str, float]) -> dict[str, float | None]:
+        limits = self._backend_ready.get("effective_joint_limits") if isinstance(self._backend_ready, dict) else None
+        out: dict[str, float | None] = {}
+        for name in EXPECTED_JOINT_NAMES:
+            payload = limits.get(name, {}) if isinstance(limits, dict) else {}
+            base = payload.get("max_velocity_rad_s")
+            out[name] = None if base is None else float(base) * float(motion_profile["velocity_scaling"])
+        return out
+
+    def _validate_plan(self, plan: PlanSummary, *, duration_limit_s: float) -> None:
         if not plan.success:
             raise ValueError(plan.reason or TouchFailure.MOVEIT_PLANNING_FAILURE)
         if not plan.metrics:
@@ -1057,10 +1214,10 @@ class MoveItArucoTouchController:
                 f"trajectory endpoint target error {metrics['maximum_target_error_rad']:.6f} exceeds "
                 f"{self.config.max_target_error_rad:.6f}"
             )
-        if metrics["total_duration_s"] > self.config.max_segment_duration_s:
+        if metrics["total_duration_s"] > duration_limit_s:
             raise ValueError(
                 f"segment duration {metrics['total_duration_s']:.3f}s exceeds limit "
-                f"{self.config.max_segment_duration_s:.3f}s"
+                f"{duration_limit_s:.3f}s"
             )
         if metrics["nonzero_motion"]:
             effective_velocity = metrics["maximum_joint_delta_rad"] / metrics["total_duration_s"]
@@ -1070,10 +1227,11 @@ class MoveItArucoTouchController:
                     f"{self.config.min_effective_joint_velocity_rad_s:.6f} rad/s"
                 )
 
-    def _validate_mission_duration(self, plans: list[PlanSummary]) -> None:
+    def _validate_mission_duration(self, plans: list[PlanSummary], *, sequence: str) -> None:
         duration = sum(float(plan.estimated_duration_s) for plan in plans) + self.config.hold_duration_s
-        if duration > self.config.max_mission_duration_s:
-            raise ValueError(f"mission duration {duration:.3f}s exceeds limit {self.config.max_mission_duration_s:.3f}s")
+        limit = self.config.home_transit_diagnostic_max_mission_duration_s if sequence == "home_transit_diagnostic" else self.config.max_mission_duration_s
+        if duration > limit:
+            raise ValueError(f"mission duration {duration:.3f}s exceeds limit {limit:.3f}s")
 
     def _state_from_plan(self, plan: PlanSummary) -> JointStateSnapshot:
         if not plan.metrics:
@@ -1130,12 +1288,16 @@ class MoveItArucoTouchController:
             "maximum_adjacent_joint_delta_rad": max((p.maximum_adjacent_joint_delta_rad for p in plans), default=0.0),
             "velocity_scaling": self.config.velocity_scaling,
             "acceleration_scaling": self.config.acceleration_scaling,
+            "motion_profiles": self.config.motion_profiles,
+            "segment_duration_limits_s": self.config.segment_duration_limits_s,
             "duration_sanity": {
                 "max_segment_duration_s": self.config.max_segment_duration_s,
                 "max_mission_duration_s": self.config.max_mission_duration_s,
+                "home_transit_diagnostic_max_mission_duration_s": self.config.home_transit_diagnostic_max_mission_duration_s,
                 "min_effective_joint_velocity_rad_s": self.config.min_effective_joint_velocity_rad_s,
                 "max_target_error_rad": self.config.max_target_error_rad,
                 "continuity_tolerance_rad": self.config.continuity_tolerance_rad,
+                "large_pose_delta_review_threshold_rad": self.config.large_pose_delta_review_threshold_rad,
             },
             "rviz_display_trajectory_published": rviz_published,
             "execution_blocked": execution_blocked,

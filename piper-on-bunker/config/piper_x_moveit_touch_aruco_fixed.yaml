@@ -17,6 +17,7 @@ moveit:
   move_group_required: true
 
 taught_poses:
+  staging: staging
   home: home
   pre_touch: pre_touch
   touch: touch
@@ -27,14 +28,39 @@ taught_poses:
 motion:
   motion_strategy: taught_joint_sequence
   hold_duration_s: 1.0
+  # Deprecated fallback fields kept for older smoke tooling. Runtime planning
+  # uses the per-segment motion_profiles below.
   velocity_scaling: 0.05
   acceleration_scaling: 0.05
+  motion_profiles:
+    transit:
+      velocity_scaling: 0.10
+      acceleration_scaling: 0.10
+    approach:
+      velocity_scaling: 0.05
+      acceleration_scaling: 0.05
+    touch:
+      velocity_scaling: 0.02
+      acceleration_scaling: 0.02
+    retract:
+      velocity_scaling: 0.05
+      acceleration_scaling: 0.05
   planning_timeout_s: 10.0
   execution_timeout_s: 20.0
   max_joint_jump_rad: 0.20
   max_adjacent_joint_delta_rad: 0.10
   max_segment_duration_s: 30.0
   max_mission_duration_s: 90.0
+  home_transit_diagnostic_max_mission_duration_s: 240.0
+  large_pose_delta_review_threshold_rad: 1.0
+  segment_duration_limits_s:
+    move_staging: 30.0
+    move_pre_touch: 30.0
+    move_touch: 15.0
+    move_retract: 15.0
+    move_staging_final: 30.0
+    move_home: 90.0
+    move_home_final: 90.0
   min_effective_joint_velocity_rad_s: 0.001
   max_target_error_rad: 0.02
   continuity_tolerance_rad: 0.001

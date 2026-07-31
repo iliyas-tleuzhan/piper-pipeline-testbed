@@ -52,10 +52,14 @@ Current conservative defaults:
 - Planning group: `arm`
 - End-effector link: `gripper_base`
 - Active motion strategy: `taught_joint_sequence`
-- Required taught poses: `home`, `pre_touch`, `touch`, `retract`
+- Required taught poses for the first contact MVP: `staging`, `pre_touch`, `touch`, `retract`
+- Optional later transit pose: `home`
 - Hold duration: `1.0 s`
-- Velocity scaling: `0.05`
-- Acceleration scaling: `0.05`
+- Motion profiles:
+  - `transit`: velocity/acceleration scaling `0.10`
+  - `approach`: velocity/acceleration scaling `0.05`
+  - `touch`: velocity/acceleration scaling `0.02`
+  - `retract`: velocity/acceleration scaling `0.05`
 - Physical execution enabled in committed config: `false`
 
 Cartesian press settings remain only under `future_cartesian_mode.enabled: false`. They are not active in v1 because PiPER-X FK/URDF is not verified.
@@ -128,7 +132,7 @@ python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
   --mock \
   --mock-taught-poses \
   --planning-only \
-  --sequence full_touch
+  --sequence fixed_touch
 ```
 
 Inspect the audit log:
@@ -181,21 +185,22 @@ Use the separate proven PiPER-X teleoperation system to manually position the ar
 
 Required taught poses:
 
-- `home`
+- `staging`
 - `pre_touch`
 - `touch`
 - `retract`
+- optional `home`
 - optional `safe_recovery`
 
 Teach all active motion as stopped joint poses. Do not use camera pose or FK to calculate any target.
 
 Procedure:
 
-1. Teach `home`: move through existing proven teleoperation, stop completely, inspect current state, save `home`.
+1. Teach `staging`: move through existing proven teleoperation to a collision-free pose near the marker but safely clear of it, stop completely, inspect current state, save `staging`.
 2. Teach `pre_touch`: place the tool several centimetres before marker, stop, save `pre_touch`.
 3. Teach `touch`: manually and slowly position the tool at very light marker contact using the proven teleoperation system, do not push deeply, stop, save `touch`.
 4. Teach `retract`: manually move safely away from marker, stop, save `retract`.
-5. Return to `home` manually.
+5. Keep `home` as an optional later transit pose, not part of the first contact test.
 
 Save a stopped pose after operator inspection:
 
@@ -203,7 +208,7 @@ Save a stopped pose after operator inspection:
 cd ~/piper-pipeline-testbed
 ./tools/save_piper_x_moveit_taught_pose.sh \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
-  --pose-name home \
+  --pose-name staging \
   --ack SAVE_STOPPED_POSE
 ```
 
@@ -229,7 +234,7 @@ python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
   --live \
   --planning-only \
-  --sequence pre_touch_test
+  --sequence staging_test
 ```
 
 Planning-only must report:
@@ -258,7 +263,7 @@ python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
   --live \
   --planning-only \
-  --sequence pre_touch_test \
+  --sequence staging_test \
   --publish-plans-to-rviz
 ```
 
@@ -271,7 +276,17 @@ cd ~/piper-pipeline-testbed
 
 The controller now plans sequentially:
 
-`actual current state -> home -> pre_touch -> touch -> retract -> home`
+`actual current state -> staging -> pre_touch -> touch -> retract -> staging`
+
+The first guarded test omits touch:
+
+`actual current state -> staging -> pre_touch -> retract -> staging`
+
+The old home transit path is available only as:
+
+`--sequence home_transit_diagnostic`
+
+It remains a planning-only diagnostic until separately verified.
 
 Every segment must start at the previous segment's final joint state. Any discontinuity above `continuity_tolerance_rad` fails planning.
 
@@ -282,7 +297,7 @@ Current diagnostic timing gate:
 - `min_effective_joint_velocity_rad_s: 0.001`
 - `max_adjacent_joint_delta_rad: 0.10`
 
-A plan that assigns roughly `100 s` to a segment is treated as diagnostic-only and blocked. With the current MoveIt limits, the effective joint speed is `0.5 rad/s * 0.05 = 0.025 rad/s`; a taught segment that moves one joint about `2.5 rad` will therefore take about `100 s`. Do not shorten trajectory timestamps manually. Either review/reteach poses, then rerun planning, or explicitly revise the conservative velocity configuration after operator review.
+A plan that assigns roughly `100 s` to a non-diagnostic staging/contact segment is treated as diagnostic-only and blocked. With the current MoveIt limits, the effective approach speed is `0.5 rad/s * 0.05 = 0.025 rad/s`; a taught segment that moves one joint about `2.5 rad` will therefore take about `100 s`. Do not shorten trajectory timestamps manually. Teach `staging` near the marker so the first test avoids the folded-home to marker transition.
 
 ## Stage 5 - Guarded Physical Test
 
@@ -290,7 +305,7 @@ Do not run physical motion until:
 
 - PiPER-X model/URDF is verified or a taught-joint fallback is explicitly chosen;
 - marker ID 6 is fresh and visible;
-- taught `home`, `pre_touch`, `touch`, and `retract` poses are reviewed;
+- taught `staging`, `pre_touch`, `touch`, and `retract` poses are reviewed;
 - collision scene is checked;
 - workspace is clear;
 - a soft/blunt tool is attached if contact is possible;
@@ -304,18 +319,18 @@ python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py \
   --config piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml \
   --live \
   --execute \
-  --sequence pre_touch_test \
-  --confirm PRE_TOUCH_TEST
+  --sequence staging_test \
+  --confirm STAGING_TEST
 ```
 
 That sequence is:
 
-`home -> pre_touch -> retract -> home`
+`staging -> pre_touch -> retract -> staging`
 
 Only after that succeeds, enable the full touch segment at minimum speed:
 
 ```bash
---execute --sequence full_touch --confirm FIXED_ARUCO_TOUCH
+--execute --sequence fixed_touch --confirm FIXED_ARUCO_TOUCH
 ```
 
 The committed config keeps physical execution disabled by default, so these commands are intentionally not ready to move the robot yet.

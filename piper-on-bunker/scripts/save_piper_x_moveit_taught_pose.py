@@ -39,7 +39,7 @@ def _read_live_joint_state(topic: str, max_age_s: float, max_velocity: float):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Save a stopped PiPER-X joint state as a MoveIt MVP taught pose; never moves the robot.")
     parser.add_argument("--config", default="piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml")
-    parser.add_argument("--pose-name", required=True, choices=["home", "pre_touch", "touch", "retract", "safe_recovery"])
+    parser.add_argument("--pose-name", required=True, choices=["staging", "home", "pre_touch", "touch", "retract", "safe_recovery"])
     parser.add_argument("--positions", default="", help="Offline comma-separated six current joint positions in radians. Normal live use reads --joint-topic.")
     parser.add_argument("--ack", required=True, help="Must be SAVE_STOPPED_POSE.")
     parser.add_argument("--source", default="operator_read_current_joint_state")

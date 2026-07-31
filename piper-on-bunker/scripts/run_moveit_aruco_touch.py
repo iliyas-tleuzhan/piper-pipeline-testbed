@@ -70,6 +70,7 @@ def _rerun_live_in_noetic_container(argv: list[str]) -> int | None:
 
 def _mock_taught_poses() -> dict[str, TaughtPose]:
     return {
+        "staging": TaughtPose("staging", list(EXPECTED_JOINT_NAMES), [0.025, -0.045, -0.075, 0.015, 0.045, 0.015], "mock"),
         "home": TaughtPose("home", list(EXPECTED_JOINT_NAMES), [0.0, -0.05, -0.08, 0.0, 0.05, 0.0], "mock"),
         "pre_touch": TaughtPose("pre_touch", list(EXPECTED_JOINT_NAMES), [0.03, -0.04, -0.07, 0.02, 0.04, 0.02], "mock"),
         "touch": TaughtPose("touch", list(EXPECTED_JOINT_NAMES), [0.04, -0.035, -0.065, 0.02, 0.035, 0.02], "mock"),
@@ -87,11 +88,11 @@ def main() -> int:
     parser.add_argument("--config", default="piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml")
     parser.add_argument("--planning-only", action="store_true", default=True)
     parser.add_argument("--check-only", action="store_true", help="Run live/mock readiness and marker checks without planning motion segments.")
-    parser.add_argument("--execute", action="store_true", help="Requires --confirm FIXED_ARUCO_TOUCH and enabled config; not for automated use.")
+    parser.add_argument("--execute", action="store_true", help="Requires sequence-specific --confirm and enabled config; not for automated use.")
     parser.add_argument("--confirm", default="")
     parser.add_argument("--mock", action="store_true", help="Use a mock MoveIt backend.")
     parser.add_argument("--live", action="store_true", help="Use the live ROS MoveIt backend. Never silently falls back to mock.")
-    parser.add_argument("--sequence", choices=["pre_touch_test", "full_touch"], default="full_touch")
+    parser.add_argument("--sequence", choices=["staging_test", "fixed_touch", "home_transit_diagnostic"], default="fixed_touch")
     parser.add_argument("--publish-plans-to-rviz", action="store_true", help="Publish planning-only DisplayTrajectory messages for RViz review.")
     parser.add_argument("--mock-taught-poses", action="store_true", help="Use deterministic mock taught poses.")
     marker_visible = parser.add_mutually_exclusive_group()

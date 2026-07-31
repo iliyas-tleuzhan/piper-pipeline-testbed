@@ -30,6 +30,7 @@ def _config():
 def _poses(joint_names=None):
     names = list(joint_names or EXPECTED_JOINT_NAMES)
     return {
+        "staging": TaughtPose("staging", names, [0.025, -0.045, -0.075, 0.015, 0.045, 0.015], "test"),
         "home": TaughtPose("home", names, [0.0, -0.05, -0.08, 0.0, 0.05, 0.0], "test"),
         "pre_touch": TaughtPose("pre_touch", names, [0.02, -0.04, -0.07, 0.0, 0.04, 0.0], "test"),
         "touch": TaughtPose("touch", names, [0.03, -0.035, -0.065, 0.0, 0.035, 0.0], "test"),
@@ -81,7 +82,7 @@ def test_stale_joint_state_rejected():
 
 def test_missing_taught_pose_rejected():
     poses = _poses()
-    del poses["touch"]
+    del poses["staging"]
     result = _run(poses=poses)
     assert not result.success
     assert TouchFailure.MISSING_TAUGHT_POSE in result.failure_reason
@@ -109,7 +110,7 @@ def test_joint_jump_rejected():
     assert "adjacent joint step" in result.failure_reason
 
 
-def test_full_touch_uses_taught_touch_pose():
+def test_fixed_touch_uses_taught_touch_pose():
     result = _run()
     assert result.success
     states = result.outputs["transitions"]
@@ -117,12 +118,13 @@ def test_full_touch_uses_taught_touch_pose():
     assert "MOVE_RETRACT" in states
 
 
-def test_pre_touch_test_never_enters_touch():
+def test_staging_test_never_enters_touch():
     controller = MoveItArucoTouchController(_config(), MockMoveItTouchBackend(), taught_poses=_poses())
-    result = controller.run(planning_only=True, sequence="pre_touch_test")
+    result = controller.run(planning_only=True, sequence="staging_test")
     assert result.success
     assert "MOVE_TOUCH" not in result.outputs["transitions"]
     assert "MOVE_RETRACT" in result.outputs["transitions"]
+    assert "MOVE_HOME" not in result.outputs["transitions"]
 
 
 def test_physical_execution_requires_explicit_confirmation():
@@ -134,9 +136,9 @@ def test_physical_execution_requires_explicit_confirmation():
 
 def test_pre_touch_test_requires_own_confirmation():
     controller = MoveItArucoTouchController(_config(), MockMoveItTouchBackend(), taught_poses=_poses())
-    result = controller.run(planning_only=False, execute=True, confirm="FIXED_ARUCO_TOUCH", sequence="pre_touch_test")
+    result = controller.run(planning_only=False, execute=True, confirm="FIXED_ARUCO_TOUCH", sequence="staging_test")
     assert not result.success
-    assert "PRE_TOUCH_TEST" in result.outputs["message"]
+    assert "STAGING_TEST" in result.outputs["message"]
 
 
 def test_marker_loss_blocks_touch():
@@ -264,6 +266,37 @@ def test_mock_plans_are_chained_from_previous_endpoint():
         assert current["metrics"]["maximum_continuity_error_rad"] == 0.0
 
 
+def test_home_transit_diagnostic_uses_home_but_is_execution_blocked():
+    controller = MoveItArucoTouchController(_config(), MockMoveItTouchBackend(), taught_poses=_poses())
+    result = controller.run(planning_only=True, sequence="home_transit_diagnostic")
+    assert result.success
+    assert "MOVE_HOME" in result.outputs["transitions"]
+    physical = controller.run(planning_only=False, execute=True, confirm="FIXED_ARUCO_TOUCH", sequence="home_transit_diagnostic")
+    assert not physical.success
+    assert "planning-only" in physical.outputs["message"]
+
+
+def test_segment_scaling_selection():
+    result = _run()
+    assert result.success
+    by_name = {plan["name"]: plan for plan in result.outputs["plans"]}
+    assert by_name["move_staging"]["motion_profile_name"] == "transit"
+    assert by_name["move_pre_touch"]["motion_profile_name"] == "approach"
+    assert by_name["move_touch"]["motion_profile_name"] == "touch"
+    assert by_name["move_touch"]["velocity_scaling"] == 0.02
+    assert by_name["move_touch"]["effective_joint_velocity_limits_rad_s"]["joint1"] == pytest.approx(0.01)
+    assert by_name["move_retract"]["motion_profile_name"] == "retract"
+
+
+def test_large_pose_delta_review_warning():
+    poses = _poses()
+    poses["pre_touch"] = TaughtPose("pre_touch", list(EXPECTED_JOINT_NAMES), [0.0, -0.04, -1.2, 0.02, 0.04, 0.02], "test")
+    cfg = replace(_config(), max_adjacent_joint_delta_rad=2.0)
+    result = MoveItArucoTouchController(cfg, MockMoveItTouchBackend(), taught_poses=poses).run(planning_only=True)
+    assert result.success
+    assert any(plan["large_displacement_review_required"] for plan in result.outputs["plans"])
+
+
 def test_adjacent_point_delta_calculation():
     metrics = linear_trajectory_metrics(
         joint_names=list(EXPECTED_JOINT_NAMES),
@@ -279,7 +312,7 @@ def test_adjacent_point_delta_calculation():
 
 def test_excessive_segment_duration_rejected():
     class SlowBackend(MockMoveItTouchBackend):
-        def plan_joint_pose(self, name, pose, config, *, start_state):
+        def plan_joint_pose(self, name, pose, config, *, start_state, motion_profile):
             metrics = linear_trajectory_metrics(
                 joint_names=list(pose.joint_names),
                 start_positions=list(start_state.positions),
@@ -305,7 +338,7 @@ def test_excessive_segment_duration_rejected():
 
 def test_discontinuous_segment_start_rejected():
     class DiscontinuousBackend(MockMoveItTouchBackend):
-        def plan_joint_pose(self, name, pose, config, *, start_state):
+        def plan_joint_pose(self, name, pose, config, *, start_state, motion_profile):
             first = [value + 0.01 for value in start_state.positions]
             metrics = _trajectory_metrics_from_arrays(
                 joint_names=list(pose.joint_names),
@@ -332,7 +365,7 @@ def test_discontinuous_segment_start_rejected():
 
 def test_non_monotonic_timestamps_rejected():
     class NonMonotonicBackend(MockMoveItTouchBackend):
-        def plan_joint_pose(self, name, pose, config, *, start_state):
+        def plan_joint_pose(self, name, pose, config, *, start_state, motion_profile):
             metrics = _trajectory_metrics_from_arrays(
                 joint_names=list(pose.joint_names),
                 start_positions=list(start_state.positions),
@@ -358,7 +391,7 @@ def test_non_monotonic_timestamps_rejected():
 
 def test_empty_trajectory_rejected():
     class EmptyBackend(MockMoveItTouchBackend):
-        def plan_joint_pose(self, name, pose, config, *, start_state):
+        def plan_joint_pose(self, name, pose, config, *, start_state, motion_profile):
             return PlanSummary(name, True, 0, execution_capable=True, metrics=None)
 
     result = _run(backend=EmptyBackend())
@@ -368,7 +401,7 @@ def test_empty_trajectory_rejected():
 
 def test_zero_duration_nonzero_motion_rejected():
     class ZeroDurationBackend(MockMoveItTouchBackend):
-        def plan_joint_pose(self, name, pose, config, *, start_state):
+        def plan_joint_pose(self, name, pose, config, *, start_state, motion_profile):
             metrics = _trajectory_metrics_from_arrays(
                 joint_names=list(pose.joint_names),
                 start_positions=list(start_state.positions),

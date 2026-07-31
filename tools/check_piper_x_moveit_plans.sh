@@ -7,7 +7,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   cat <<'EOF'
 Usage: tools/check_piper_x_moveit_plans.sh
 
-Runs live planning-only checks for pre_touch_test and full_touch, writes JSON
+Runs live planning-only checks for staging_test, fixed_touch, and
+home_transit_diagnostic, writes JSON
 reports under piper-on-bunker/logs/moveit_aruco_touch/plan_checks/, and never
 requests physical execution.
 EOF
@@ -37,8 +38,9 @@ run_plan() {
   return 0
 }
 
-run_plan pre_touch_test
-run_plan full_touch
+run_plan staging_test
+run_plan fixed_touch
+run_plan home_transit_diagnostic
 
 python3 - "$OUT_DIR" <<'PY'
 import json
@@ -48,7 +50,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 print("=== Summary ===")
 print(f"report_dir: {root}")
-for name in ["pre_touch_test", "full_touch"]:
+for name in ["staging_test", "fixed_touch", "home_transit_diagnostic"]:
     path = root / f"{name}.json"
     try:
         text = path.read_text(encoding="utf-8")
@@ -75,7 +77,8 @@ for name in ["pre_touch_test", "full_touch"]:
         print(
             "  {name}: points={points} duration_s={duration:.3f} "
             "max_delta={max_delta:.6f} max_adjacent={max_adjacent:.6f} "
-            "continuity={continuity:.6f} target_error={target_error:.6f}".format(
+            "continuity={continuity:.6f} target_error={target_error:.6f} "
+            "profile={profile} large_delta_review={review}".format(
                 name=plan.get("name"),
                 points=plan.get("trajectory_points", 0),
                 duration=float(plan.get("estimated_duration_s") or 0.0),
@@ -83,6 +86,8 @@ for name in ["pre_touch_test", "full_touch"]:
                 max_adjacent=float(plan.get("maximum_adjacent_joint_delta_rad") or 0.0),
                 continuity=float(metrics.get("maximum_continuity_error_rad") or 0.0),
                 target_error=float(metrics.get("maximum_target_error_rad") or 0.0),
+                profile=plan.get("motion_profile_name"),
+                review=plan.get("large_displacement_review_required"),
             )
         )
 PY

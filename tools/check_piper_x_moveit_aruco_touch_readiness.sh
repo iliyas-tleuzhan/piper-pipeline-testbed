@@ -98,11 +98,17 @@ from pathlib import Path
 import yaml
 
 manifest = Path("piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml")
-required = ["home", "pre_touch", "touch", "retract"]
+required = ["staging", "pre_touch", "touch", "retract"]
+diagnostic = ["home"]
 expected_joints = ["joint1", "joint2", "joint3", "joint4", "joint5", "joint6"]
 if not manifest.exists():
     for pose in required:
         print(f"taught_{pose}: missing")
+    for pose in diagnostic:
+        print(f"taught_{pose}: missing_diagnostic_optional")
+    print("staging_test_planning_ready: False")
+    print("fixed_touch_planning_ready: False")
+    print("home_transit_diagnostic_ready: False")
     raise SystemExit(0)
 
 try:
@@ -113,25 +119,34 @@ except Exception as exc:
     raise SystemExit(0)
 
 poses = data.get("poses") or {}
-for pose in required:
+status = {}
+for pose in required + diagnostic:
     payload = poses.get(pose)
     if not payload:
-        print(f"taught_{pose}: missing")
+        label = "missing" if pose in required else "missing_diagnostic_optional"
+        print(f"taught_{pose}: {label}")
+        status[pose] = False
         continue
     names = list(payload.get("joint_names") or [])
     positions = list(payload.get("positions") or [])
     if names != expected_joints:
         print(f"taught_{pose}: invalid_joint_schema ({names})")
+        status[pose] = False
     elif len(positions) != 6:
         print(f"taught_{pose}: invalid_position_count ({len(positions)})")
+        status[pose] = False
     else:
         print(f"taught_{pose}: exists")
+        status[pose] = True
+print(f"staging_test_planning_ready: {all(status.get(p) for p in ['staging', 'pre_touch', 'retract'])}")
+print(f"fixed_touch_planning_ready: {all(status.get(p) for p in ['staging', 'pre_touch', 'touch', 'retract'])}")
+print(f"home_transit_diagnostic_ready: {all(status.get(p) for p in ['home', 'pre_touch', 'retract'])}")
 PY
 
 echo "physical_execution_enabled: false (committed config default)"
 echo "rejected_handeye_transform_used_for_targeting: false"
 echo "mock_ready: true"
 echo "live_read_only_ready: requires camera image, aruco debug image, joint state, and move_group; marker pose additionally requires marker ID 6 visible"
-echo "live_planning_ready: requires moveit_commander/move_group and all taught poses"
+echo "live_planning_ready: see staging_test_planning_ready, fixed_touch_planning_ready, and home_transit_diagnostic_ready"
 echo "physical_execution_blocked: true"
 echo "physical_execution_ready: false"

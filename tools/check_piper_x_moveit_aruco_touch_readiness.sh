@@ -31,7 +31,22 @@ ok_topic /wrist_camera/color/image_rect_color
 echo "aruco debug image:"
 ok_topic /aruco_simple/debug_image
 echo "marker pose:"
-ok_topic /aruco_simple/pose
+python3 - <<'PY'
+import rospy
+from geometry_msgs.msg import PoseStamped
+
+max_age_s = 0.5
+rospy.init_node("piper_x_moveit_marker_readiness", anonymous=True, disable_signals=True)
+try:
+    msg = rospy.wait_for_message("/aruco_simple/pose", PoseStamped, timeout=1.0)
+    age_s = rospy.Time.now().to_sec() - msg.header.stamp.to_sec()
+    if age_s <= max_age_s:
+        print(f"/aruco_simple/pose: ok age_s={age_s:.3f}")
+    else:
+        print(f"/aruco_simple/pose: stale age_s={age_s:.3f} max_age_s={max_age_s:.3f}")
+except Exception as exc:
+    print(f"/aruco_simple/pose: not_ready ({exc})")
+PY
 echo "joint state:"
 ok_topic /joint_states_single
 

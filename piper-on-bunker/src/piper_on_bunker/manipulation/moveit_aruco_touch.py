@@ -655,14 +655,14 @@ class MoveItArucoTouchController:
         if require_taught_poses:
             for pose_name in [self.config.home_pose_name, self.config.pre_touch_pose_name, self.config.touch_pose_name, self.config.retract_pose_name]:
                 pose = self._pose(pose_name)
-                validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits)
+                validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits, tolerance_rad=self.config.taught_pose_limit_tolerance_rad)
 
     def _validate_before_movement(self, pose: TaughtPose) -> None:
         state = self.backend.read_joint_state()
         if state.age_s > self.config.max_joint_state_age_s:
             raise ValueError(TouchFailure.STALE_JOINT_STATE)
-        validate_joint_values(state.joint_names, state.positions, self.config.joint_limits)
-        validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits)
+        validate_joint_values(state.joint_names, state.positions, self.config.joint_limits, tolerance_rad=self.config.taught_pose_limit_tolerance_rad)
+        validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits, tolerance_rad=self.config.taught_pose_limit_tolerance_rad)
         if not self.backend.wait_until_stopped():
             raise ValueError("previous trajectory still active or robot is not stopped")
 

@@ -46,6 +46,9 @@ alignment:
   simple_up_step_m: 0.020
   simple_forward_step_m: 0.020
   simple_forward_axis_world: [1.0, 0.0, 0.0]
+  continuous_forward_stop_depth_m: 0.080
+  continuous_max_forward_m: 0.120
+  continuous_max_forward_steps: 8
   max_alignment_iterations: 6
   cartesian_eef_step_m: 0.005
   cartesian_fraction_threshold: 1.0

@@ -290,13 +290,92 @@ def _live_simple_up_then_forward(config_path: str, confirm: str) -> dict[str, An
     }
 
 
+def _normalized_forward(config: Any, magnitude_m: float) -> list[float]:
+    axis = config.simple_forward_axis_world
+    norm = sum(v * v for v in axis) ** 0.5
+    if norm <= 0.0:
+        raise RuntimeError("simple_forward_axis_world must be nonzero")
+    return [float(v) / norm * float(magnitude_m) for v in axis]
+
+
+def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[str, Any]:
+    import moveit_commander
+    import rospy
+
+    if confirm != "CONTINUOUS_SIMPLE_UP_FORWARD":
+        raise RuntimeError("continuous simple up/forward requires --confirm CONTINUOUS_SIMPLE_UP_FORWARD")
+    config = load_visual_servo_touch_config(config_path)
+    if not rospy.get_node_uri():
+        rospy.init_node("piper_x_continuous_simple_up_forward", anonymous=True, disable_signals=True)
+    moveit_commander.roscpp_initialize([])
+    group = moveit_commander.MoveGroupCommander(config.planning_group)
+    group.set_end_effector_link(config.end_effector_link)
+    group.set_max_velocity_scaling_factor(0.04)
+    group.set_max_acceleration_scaling_factor(0.04)
+
+    actions: list[dict[str, Any]] = []
+    estimates: list[dict[str, Any]] = []
+
+    for index in range(config.max_alignment_iterations):
+        report, estimate = _capture_estimate(config)
+        estimates.append(report)
+        blockers = _execution_blockers(config, estimate, allow_not_centered=True)
+        if blockers:
+            raise RuntimeError(f"continuous vertical alignment blocked: {blockers}")
+        if estimate.pixel_error_uv is None:
+            raise RuntimeError("marker pixel error unavailable")
+        vertical_error = float(estimate.pixel_error_uv[1])
+        if abs(vertical_error) <= config.image_center_tolerance_px:
+            actions.append({"name": "vertical_alignment_complete", "iteration": index, "pixel_error_uv": list(estimate.pixel_error_uv)})
+            break
+        step = config.simple_up_step_m if vertical_error < 0.0 else -config.simple_up_step_m
+        actions.append(_execute_world_delta(group, config, name=f"vertical_step_{index + 1}", delta_world_m=[0.0, 0.0, step]))
+    else:
+        raise RuntimeError("vertical alignment did not converge before max_alignment_iterations")
+
+    total_forward = 0.0
+    for index in range(config.continuous_max_forward_steps):
+        report, estimate = _capture_estimate(config)
+        estimates.append(report)
+        blockers = _execution_blockers(config, estimate, allow_not_centered=True)
+        if blockers:
+            raise RuntimeError(f"continuous forward blocked: {blockers}")
+        depth = float(estimate.depth_m or 0.0)
+        if depth <= config.continuous_forward_stop_depth_m:
+            actions.append({"name": "forward_stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
+            break
+        remaining = max(0.0, config.continuous_max_forward_m - total_forward)
+        if remaining <= 1e-6:
+            actions.append({"name": "forward_stop_total_cap_reached", "total_forward_m": total_forward})
+            break
+        step_mag = min(config.simple_forward_step_m, remaining, max(0.0, depth - config.continuous_forward_stop_depth_m))
+        if step_mag <= 1e-6:
+            actions.append({"name": "forward_stop_no_remaining_safe_step", "depth_m": depth, "total_forward_m": total_forward})
+            break
+        actions.append(_execute_world_delta(group, config, name=f"forward_step_{index + 1}", delta_world_m=_normalized_forward(config, step_mag)))
+        total_forward += step_mag
+
+    return {
+        "config": config_path,
+        "mode": "continuous_simple_up_forward",
+        "motion_commanded": True,
+        "actions": actions,
+        "estimates": estimates,
+        "total_forward_m": total_forward,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="piper-on-bunker/config/piper_x_visual_servo_aruco_touch.yaml")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm", default="")
-    parser.add_argument("--mode", choices=["check", "align_then_depth_touch", "simple_up_then_forward"], default="check")
+    parser.add_argument(
+        "--mode",
+        choices=["check", "align_then_depth_touch", "simple_up_then_forward", "continuous_simple_up_forward"],
+        default="check",
+    )
     args = parser.parse_args(argv)
 
     if args.execute and args.mode == "check":
@@ -322,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.execute and args.mode == "simple_up_then_forward":
             report = _live_simple_up_then_forward(args.config, args.confirm)
+        elif args.execute and args.mode == "continuous_simple_up_forward":
+            report = _live_continuous_simple_up_forward(args.config, args.confirm)
         elif args.execute:
             report = _live_align_then_depth_touch(args.config, args.confirm)
         else:

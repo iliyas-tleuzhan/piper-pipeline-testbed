@@ -180,6 +180,31 @@ def _execute_world_delta(group: Any, config: Any, *, name: str, delta_world_m: l
     return {"name": name, "delta_world_m": [float(v) for v in delta_world_m], "cartesian_fraction": float(fraction)}
 
 
+def _lock_joint1_path_constraint(group: Any, config: Any) -> dict[str, Any]:
+    from moveit_msgs.msg import Constraints, JointConstraint
+
+    active_joints = list(group.get_active_joints())
+    values = list(group.get_current_joint_values())
+    if "joint1" not in active_joints:
+        raise RuntimeError(f"cannot lock joint1; active joints are {active_joints}")
+    position = float(values[active_joints.index("joint1")])
+    constraint = Constraints()
+    constraint.name = "lock_joint1_during_forward"
+    joint = JointConstraint()
+    joint.joint_name = "joint1"
+    joint.position = position
+    joint.tolerance_above = float(config.forward_lock_joint1_tolerance_rad)
+    joint.tolerance_below = float(config.forward_lock_joint1_tolerance_rad)
+    joint.weight = 1.0
+    constraint.joint_constraints.append(joint)
+    group.set_path_constraints(constraint)
+    return {
+        "joint": "joint1",
+        "locked_position_rad": position,
+        "tolerance_rad": float(config.forward_lock_joint1_tolerance_rad),
+    }
+
+
 def _center_depth_m_from_msg(msg: Any, config: Any) -> float | None:
     depth = _depth_to_array(msg)
     return depth_roi_m(
@@ -247,9 +272,21 @@ def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) ->
     for index in range(1, waypoint_count + 1):
         mag = min(float(distance_m), index * config.simple_forward_step_m)
         waypoints.append(_pose_translated_in_world(current, [axis[0] * mag, axis[1] * mag, axis[2] * mag]))
-    plan, fraction = group.compute_cartesian_path(waypoints, float(config.cartesian_eef_step_m), 0.0)
+    joint1_lock = _lock_joint1_path_constraint(group, config)
+    try:
+        plan, fraction = group.compute_cartesian_path(waypoints, float(config.cartesian_eef_step_m), 0.0)
+    except Exception:
+        try:
+            group.clear_path_constraints()
+        except Exception:
+            pass
+        raise
     if float(fraction) <= 0.0:
-        raise RuntimeError("continuous forward Cartesian planner returned zero usable path")
+        try:
+            group.clear_path_constraints()
+        except Exception:
+            pass
+        raise RuntimeError("continuous forward Cartesian planner returned zero usable path with joint1 locked")
 
     thread = threading.Thread(target=watch_depth, daemon=True)
     thread.start()
@@ -262,6 +299,10 @@ def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) ->
             group.stop()
         except Exception:
             pass
+        try:
+            group.clear_path_constraints()
+        except Exception:
+            pass
         thread.join(timeout=1.0)
     return {
         "name": "continuous_forward_until_depth",
@@ -270,6 +311,7 @@ def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) ->
         "cartesian_fraction_warning": None
         if float(fraction) >= float(config.cartesian_fraction_threshold)
         else f"executed partial Cartesian path fraction {fraction:.3f}; continuing command did not fail on fraction",
+        "joint1_lock": joint1_lock,
         "moveit_execute_returned": ok,
         "depth_stop_triggered": bool(monitor["triggered"]),
         "depth_monitor": monitor,
@@ -438,14 +480,22 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
     center_depth_report = _capture_center_depth(config)
     estimates.append({"forward_depth_precheck": center_depth_report})
     depth = float(center_depth_report["center_depth_m"] or 0.0)
-    if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
-        actions.append({"name": "forward_stop_depth_already_reached", "depth_m": depth})
-        total_forward = 0.0
-    else:
+    total_forward = 0.0
+    while not rospy.is_shutdown():
+        center_depth_report = _capture_center_depth(config)
+        estimates.append({"forward_depth": center_depth_report})
+        depth = float(center_depth_report["center_depth_m"] or 0.0)
+        if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
+            actions.append({"name": "forward_stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
+            break
         forward_distance = max(config.simple_forward_step_m, depth + 0.05)
         action = _execute_monitored_forward(group, config, distance_m=forward_distance)
         actions.append(action)
-        total_forward = float(action["planned_forward_distance_m"])
+        total_forward += float(action["planned_forward_distance_m"]) * float(action["cartesian_fraction"])
+        if action.get("depth_stop_triggered"):
+            break
+        if not action.get("moveit_execute_returned", False):
+            raise RuntimeError(f"MoveIt forward execute returned false after {total_forward:.3f} m")
 
     return {
         "config": config_path,

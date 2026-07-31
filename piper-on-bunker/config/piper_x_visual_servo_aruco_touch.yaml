@@ -49,6 +49,7 @@ alignment:
   continuous_forward_stop_depth_m: 0.010
   continuous_max_forward_m: 0.150
   continuous_max_forward_steps: 10
+  forward_lock_joint1_tolerance_rad: 0.010
   max_alignment_iterations: 6
   cartesian_eef_step_m: 0.005
   cartesian_fraction_threshold: 1.0

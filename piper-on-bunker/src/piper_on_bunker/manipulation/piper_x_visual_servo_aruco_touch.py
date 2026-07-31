@@ -54,6 +54,7 @@ class VisualServoTouchConfig:
     continuous_forward_stop_depth_m: float
     continuous_max_forward_m: float
     continuous_max_forward_steps: int
+    forward_lock_joint1_tolerance_rad: float
     max_alignment_iterations: int
     cartesian_eef_step_m: float
     cartesian_fraction_threshold: float
@@ -107,6 +108,7 @@ class VisualServoTouchConfig:
             continuous_forward_stop_depth_m=float(align.get("continuous_forward_stop_depth_m", 0.080)),
             continuous_max_forward_m=float(align.get("continuous_max_forward_m", 0.120)),
             continuous_max_forward_steps=int(align.get("continuous_max_forward_steps", 8)),
+            forward_lock_joint1_tolerance_rad=float(align.get("forward_lock_joint1_tolerance_rad", 0.010)),
             max_alignment_iterations=int(align.get("max_alignment_iterations", 6)),
             cartesian_eef_step_m=float(align.get("cartesian_eef_step_m", 0.005)),
             cartesian_fraction_threshold=float(align.get("cartesian_fraction_threshold", 1.0)),

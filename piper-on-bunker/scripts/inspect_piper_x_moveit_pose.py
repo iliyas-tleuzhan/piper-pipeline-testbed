@@ -75,6 +75,12 @@ def main() -> int:
         validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits)
     except ValueError as exc:
         output["joint_limit_validation"] = {"passed": False, "error": str(exc)}
+    output["taught_pose_limit_tolerance_rad"] = config.taught_pose_limit_tolerance_rad
+    output["joint_limit_validation_with_teaching_tolerance"] = {"passed": True, "error": None}
+    try:
+        validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits, tolerance_rad=config.taught_pose_limit_tolerance_rad)
+    except ValueError as exc:
+        output["joint_limit_validation_with_teaching_tolerance"] = {"passed": False, "error": str(exc)}
     output["current_joint_state"] = snapshot.__dict__
     print(json.dumps(output, indent=2, sort_keys=True))
     return 0

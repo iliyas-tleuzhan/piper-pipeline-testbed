@@ -108,6 +108,7 @@ class TouchConfig:
     max_image_age_s: float
     max_joint_state_age_s: float
     marker_stability_required_s: float
+    taught_pose_limit_tolerance_rad: float
     joint_limits: dict[str, list[float]]
     workspace_limits: dict[str, list[float]]
     physical_execution_enabled_by_default: bool
@@ -153,6 +154,7 @@ class TouchConfig:
             max_image_age_s=float(safety["max_image_age_s"]),
             max_joint_state_age_s=float(safety["max_joint_state_age_s"]),
             marker_stability_required_s=float(safety["marker_stability_required_s"]),
+            taught_pose_limit_tolerance_rad=float(safety.get("taught_pose_limit_tolerance_rad", 0.0)),
             joint_limits={str(k): [float(v[0]), float(v[1])] for k, v in safety["joint_limits"].items()},
             workspace_limits={str(k): [float(v[0]), float(v[1])] for k, v in safety["workspace_limits"].items()},
             physical_execution_enabled_by_default=bool(safety["physical_execution_enabled_by_default"]),
@@ -249,15 +251,18 @@ def extract_named_joint_state(
     return JointStateSnapshot(expected, mapped_positions, age_s, mapped_velocities, float(stamp_s), source_topic)
 
 
-def validate_joint_values(joint_names: list[str], positions: list[float], limits: dict[str, list[float]]) -> None:
+def validate_joint_values(joint_names: list[str], positions: list[float], limits: dict[str, list[float]], *, tolerance_rad: float = 0.0) -> None:
     validate_joint_schema(joint_names)
     if len(positions) != 6:
         raise ValueError("expected exactly six arm joint positions")
+    tolerance = max(0.0, float(tolerance_rad))
     for name, value in zip(joint_names, positions):
         if not math.isfinite(float(value)):
             raise ValueError(f"non-finite joint value for {name}")
         lower, upper = limits[name]
-        if float(value) < lower or float(value) > upper:
+        if float(value) < lower - tolerance or float(value) > upper + tolerance:
+            if tolerance:
+                raise ValueError(f"{name}={value:.6f} outside limits [{lower:.6f}, {upper:.6f}] with tolerance {tolerance:.6f}")
             raise ValueError(f"{name}={value:.6f} outside limits [{lower:.6f}, {upper:.6f}]")
 
 

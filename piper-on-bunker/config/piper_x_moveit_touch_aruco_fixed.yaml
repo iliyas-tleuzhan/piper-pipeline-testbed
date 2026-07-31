@@ -44,6 +44,9 @@ safety:
   max_image_age_s: 0.5
   max_joint_state_age_s: 0.5
   marker_stability_required_s: 0.5
+  # Teaching-only tolerance for small encoder/model zero disagreements while
+  # PiPER-X FK remains unverified. This does not authorize physical execution.
+  taught_pose_limit_tolerance_rad: 0.02
   physical_execution_enabled_by_default: false
   joint_limits:
     joint1: [-2.618, 2.618]

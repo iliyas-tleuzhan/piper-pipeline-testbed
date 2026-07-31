@@ -62,8 +62,18 @@ def main() -> int:
         )
     else:
         snapshot = _read_live_joint_state(args.joint_topic, config.max_joint_state_age_s, args.max_velocity_rad_s)
-    validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits)
-    print(json.dumps({"about_to_save": args.pose_name, "joint_state": snapshot.__dict__, "motion_commanded": False}, indent=2, sort_keys=True))
+    strict_validation = {"passed": True, "error": None}
+    try:
+        validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits)
+    except ValueError as exc:
+        strict_validation = {"passed": False, "error": str(exc)}
+    validate_joint_values(snapshot.joint_names, snapshot.positions, config.joint_limits, tolerance_rad=config.taught_pose_limit_tolerance_rad)
+    teaching_validation = {
+        "passed": True,
+        "tolerance_rad": config.taught_pose_limit_tolerance_rad,
+        "strict_validation": strict_validation,
+    }
+    print(json.dumps({"about_to_save": args.pose_name, "joint_state": snapshot.__dict__, "joint_limit_validation": teaching_validation, "motion_commanded": False}, indent=2, sort_keys=True))
     pose = TaughtPose(args.pose_name, list(snapshot.joint_names), list(snapshot.positions), args.source)
     metadata = {
         "profile_id": config.profile_id,
@@ -74,6 +84,8 @@ def main() -> int:
         "robot_urdf_candidate_path": config.robot_urdf_candidate_path,
         "robot_urdf_candidate_sha256": config.robot_urdf_candidate_sha256,
         "piper_x_model_verified": config.piper_x_model_verified,
+        "taught_pose_limit_tolerance_rad": config.taught_pose_limit_tolerance_rad,
+        "joint_limit_validation": teaching_validation,
         "source_topic": snapshot.source_topic,
         "source_stamp_s": snapshot.stamp_s,
         "motion_commanded": False,

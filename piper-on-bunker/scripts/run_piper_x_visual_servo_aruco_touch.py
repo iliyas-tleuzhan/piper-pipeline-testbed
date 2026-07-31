@@ -316,46 +316,48 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
     actions: list[dict[str, Any]] = []
     estimates: list[dict[str, Any]] = []
 
-    total_forward = 0.0
-    max_steps = max(config.max_alignment_iterations, config.continuous_max_forward_steps)
-    for index in range(max_steps):
+    for index in range(config.max_alignment_iterations):
         report, estimate = _capture_estimate(config)
         estimates.append(report)
         blockers = _execution_blockers(config, estimate, allow_not_centered=True)
         if blockers:
-            raise RuntimeError(f"continuous combined step blocked: {blockers}")
+            raise RuntimeError(f"continuous vertical alignment blocked: {blockers}")
         if estimate.pixel_error_uv is None:
             raise RuntimeError("marker pixel error unavailable")
+        vertical_error = float(estimate.pixel_error_uv[1])
+        if abs(vertical_error) <= config.image_center_tolerance_px:
+            actions.append({"name": "vertical_alignment_complete", "iteration": index, "pixel_error_uv": list(estimate.pixel_error_uv)})
+            break
+        vertical_step = config.simple_up_step_m if vertical_error < 0.0 else -config.simple_up_step_m
+        action = _execute_world_delta(group, config, name=f"vertical_align_step_{index + 1}", delta_world_m=[0.0, 0.0, vertical_step])
+        action["vertical_component_m"] = vertical_step
+        action["pixel_error_uv"] = list(estimate.pixel_error_uv)
+        actions.append(action)
+    else:
+        raise RuntimeError("vertical alignment did not converge before max_alignment_iterations")
 
+    total_forward = 0.0
+    for index in range(config.continuous_max_forward_steps):
+        report, estimate = _capture_estimate(config)
+        estimates.append(report)
+        blockers = _execution_blockers(config, estimate, allow_not_centered=True)
+        if blockers:
+            raise RuntimeError(f"continuous forward blocked: {blockers}")
         depth = float(estimate.depth_m or 0.0)
-        if depth <= config.continuous_forward_stop_depth_m:
-            actions.append({"name": "stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
+        if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
+            actions.append({"name": "forward_stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
             break
         remaining = max(0.0, config.continuous_max_forward_m - total_forward)
         if remaining <= 1e-6:
-            actions.append({"name": "stop_total_forward_cap_reached", "total_forward_m": total_forward})
+            actions.append({"name": "forward_stop_total_cap_reached", "total_forward_m": total_forward})
             break
-
-        forward_mag = min(config.simple_forward_step_m, remaining, max(0.0, depth - config.continuous_forward_stop_depth_m))
-        forward = _normalized_forward(config, forward_mag)
-        vertical_error = float(estimate.pixel_error_uv[1])
-        vertical_step = 0.0
-        if vertical_error < -config.image_center_tolerance_px:
-            vertical_step = config.simple_up_step_m
-        elif vertical_error > config.image_center_tolerance_px:
-            vertical_step = -config.simple_up_step_m
-
-        if forward_mag <= 1e-6 and abs(vertical_step) <= 1e-6:
-            actions.append({"name": "stop_no_remaining_step", "depth_m": depth, "total_forward_m": total_forward, "pixel_error_uv": list(estimate.pixel_error_uv)})
-            break
-        combined = [float(forward[0]), float(forward[1]), float(forward[2] + vertical_step)]
-        action = _execute_world_delta(group, config, name=f"combined_up_forward_step_{index + 1}", delta_world_m=combined)
-        action["forward_component_m"] = forward_mag
-        action["vertical_component_m"] = vertical_step
-        action["pixel_error_uv"] = list(estimate.pixel_error_uv)
+        step_mag = min(config.simple_forward_step_m, remaining)
+        action = _execute_world_delta(group, config, name=f"forward_hold_height_step_{index + 1}", delta_world_m=_normalized_forward(config, step_mag))
+        action["forward_component_m"] = step_mag
         action["depth_m"] = depth
+        action["height_change_m"] = 0.0
         actions.append(action)
-        total_forward += forward_mag
+        total_forward += step_mag
 
     return {
         "config": config_path,

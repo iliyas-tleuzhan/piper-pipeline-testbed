@@ -10,9 +10,7 @@ CAMERA_SERIAL=${CAMERA_SERIAL:-243322074578}
 AGX_ARM_URDF_HOST=${AGX_ARM_URDF_HOST:-/home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf}
 STAGED_ROS_PKGS=${STAGED_ROS_PKGS:-/tmp/piper_x_moveit_ros}
 PIPER_X_JOINT3_UPPER_OVERRIDE_RAD=${PIPER_X_JOINT3_UPPER_OVERRIDE_RAD:-0.02}
-PIPER_X_FEEDBACK_MODULE=${PIPER_X_FEEDBACK_MODULE:-pyagxarm}
-PIPER_X_FEEDBACK_CLASS=${PIPER_X_FEEDBACK_CLASS:-AgxArm}
-PIPER_X_FEEDBACK_METHOD=${PIPER_X_FEEDBACK_METHOD:-get_leader_joint_angles}
+PIPER_X_FEEDBACK_VERIFIED=${PIPER_X_FEEDBACK_VERIFIED:-false}
 
 cd "$(dirname "$0")/.."
 
@@ -86,7 +84,7 @@ targets = [
     "piper_ctrl_single_node.py",
     "piper_joint_state_relay.py",
     "relay_piper_x_arm_joint_states.py",
-    "piper_x_pyagxarm_joint_state_bridge.py",
+    "piper_x_passive_socketcan_joint_state_bridge.py",
     "piper_with_gripper_moveit",
     "piper_x_moveit_config",
     "move_group",
@@ -121,8 +119,10 @@ sleep 2
 
 ROS_PREFIX="source /opt/ros/noetic/setup.bash; source /root/ABot-Claw/robot_layer/arm_piper/agent_server/robot_driver_ros/devel/setup.bash 2>/dev/null || true; source /root/easy_handeye_ws/devel/setup.bash 2>/dev/null || true; export ROS_PACKAGE_PATH=/root/piper-pipeline-testbed/piper-on-bunker/ros:$STAGED_ROS_PKGS:\${ROS_PACKAGE_PATH:-}; export ROS_MASTER_URI=http://localhost:11311 ROS_HOSTNAME=localhost;"
 
-tmux new-window -t "$SESSION" -n piper_x_feedback "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX export PYTHONPATH=/root/piper-pipeline-testbed/piper-on-bunker/src:\${PYTHONPATH:-}; python3 /root/piper-pipeline-testbed/piper-on-bunker/scripts/piper_x_pyagxarm_joint_state_bridge.py --can can0 --module $PIPER_X_FEEDBACK_MODULE --class-name $PIPER_X_FEEDBACK_CLASS --feedback-method $PIPER_X_FEEDBACK_METHOD --joint-topic /piper_x/joint_states --moveit-joint-topic /joint_states'"
-tmux new-window -t "$SESSION" -n moveit "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX until timeout 3 rostopic echo -n 1 /joint_states >/dev/null 2>&1; do echo waiting for /joint_states; sleep 1; done; roslaunch piper_x_moveit_config planning_only.launch use_rviz:=false'"
+tmux new-window -t "$SESSION" -n piper_x_feedback "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX export PYTHONPATH=/root/piper-pipeline-testbed/piper-on-bunker/src:\${PYTHONPATH:-}; python3 /root/piper-pipeline-testbed/piper-on-bunker/scripts/piper_x_passive_socketcan_joint_state_bridge.py --can can0 --joint-topic /piper_x/joint_states'"
+if [[ "$PIPER_X_FEEDBACK_VERIFIED" == "true" ]]; then
+  tmux new-window -t "$SESSION" -n moveit_blocked "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX echo PiPER-X feedback verification flag set, but /joint_states relay is intentionally not implemented in this helper yet; sleep infinity'"
+fi
 tmux new-window -t "$SESSION" -n d435i_wrist "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX cd /root/ABot-Claw/robot_layer/arm_piper/agent_server; python3 realsense_d555_py_publisher.py --camera wrist_camera --serial $CAMERA_SERIAL --width 640 --height 480 --fps 15'"
 tmux new-window -t "$SESSION" -n image_rectify "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_raw >/dev/null 2>&1; do echo waiting for wrist raw image; sleep 1; done; rosrun image_proc image_proc __name:=image_proc __ns:=/wrist_camera/color'"
 tmux new-window -t "$SESSION" -n aruco "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX export PYTHONPATH=/root/piper-pipeline-testbed/piper-on-bunker/src:\${PYTHONPATH:-}; while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_rect_color >/dev/null 2>&1; do echo waiting for rectified wrist image; sleep 1; done; python3 /root/piper-pipeline-testbed/piper-on-bunker/scripts/piper_x_aruco_pose_node.py _image_topic:=/wrist_camera/color/image_rect_color _camera_info_topic:=/wrist_camera/color/camera_info _image_geometry_mode:=rectified _pose_topic:=/aruco_simple/pose _debug_image_topic:=/aruco_simple/debug_image _dictionary:=$MARKER_DICTIONARY _marker_id:=$MARKER_ID _marker_size_m:=$MARKER_SIZE_M _camera_frame:=wrist_camera_color_optical_frame _marker_frame:=aruco_marker_frame'"
@@ -143,12 +143,13 @@ done
 echo "Started tmux session: $SESSION"
 echo "No OpenPI, VLA, Bunker navigation, mission execution, or rejected hand-eye publisher was started."
 echo "Normal PiPER piper_ctrl_single_node is not started for PiPER-X state."
-echo "PiPER-X feedback bridge: module=$PIPER_X_FEEDBACK_MODULE class=$PIPER_X_FEEDBACK_CLASS method=$PIPER_X_FEEDBACK_METHOD"
+echo "PiPER-X feedback bridge: passive SocketCAN RX-only decoder"
+echo "Feedback decoder source: /home/dase-hw101/Iliyas/piper-lora-teleop-bridge @ 521c9c5fdfd9ee63bd96c0f9342fca6b2398092e"
 echo "PiPER driver auto_enable:=false (normal driver disabled in this runtime)"
 echo "MoveIt model: PiPER-X staged from $AGX_ARM_URDF_HOST/piper_x"
 echo "MoveIt bounds override: joint3 upper -> $PIPER_X_JOINT3_UPPER_OVERRIDE_RAD rad in staged URDF only"
 echo "PiPER-X FK/model verification: false; physical execution remains blocked"
-echo "MoveIt joint-state authority: /piper_x/joint_states -> /joint_states"
+echo "MoveIt joint-state authority: not connected yet; /joint_states relay remains blocked until manual joint verification"
 echo "Marker contract: $MARKER_DICTIONARY ID $MARKER_ID size $MARKER_SIZE_M m"
 echo
 echo "Readiness:"

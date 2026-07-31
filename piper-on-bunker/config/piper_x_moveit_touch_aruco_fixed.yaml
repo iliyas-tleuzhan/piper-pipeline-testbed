@@ -27,11 +27,15 @@ taught_poses:
 
 feedback:
   authoritative_joint_state_topic: /piper_x/joint_states
-  required_feedback_source_id: piper_x_pyagxarm_readonly_v1
-  required_joint_mapping_version: piper_x_pyagxarm_joint_order_rad_v1
-  required_pyagxarm_commit: 9eec6e26d927a495efaaa0e7e5af2895310caefe
+  required_feedback_source_id: piper_x_passive_socketcan_feedback_v1
+  required_joint_mapping_version: piper_x_lora_feedback_2a5_2a6_2a7_raw001deg_to_rad_v1
+  required_dependency_repo: /home/dase-hw101/Iliyas/piper-lora-teleop-bridge
+  required_dependency_commit: 521c9c5fdfd9ee63bd96c0f9342fca6b2398092e
   configured_arm_model: agilex_piper_x
-  configured_firmware_profile: unresolved_read_only_feedback_only
+  configured_firmware_profile: unresolved_passive_feedback_only
+  adapter_type: passive_socketcan
+  source_can_ids: [0x2A5, 0x2A6, 0x2A7]
+  frame_units: raw signed int32 big-endian 0.001 degrees converted to radians
   normal_piper_joint_state_topic_rejected: /joint_states_single
   invalidated_pose_reason: normal PiPER piper_ctrl_single_node published fresh all-zero feedback from nondecoded PiPER-X CAN frames
 

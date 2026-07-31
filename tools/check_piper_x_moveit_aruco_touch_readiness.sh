@@ -67,30 +67,32 @@ else:
         print("can0: not_ready " + text.replace("\n", " ")[:240])
 PY
 
-echo "pyAgxArm feedback status:"
+echo "passive SocketCAN feedback status:"
 python3 - <<'PY'
 import json
 import rospy
 from std_msgs.msg import String
 
-rospy.init_node("piper_x_pyagxarm_feedback_readiness", anonymous=True, disable_signals=True)
+rospy.init_node("piper_x_passive_feedback_readiness", anonymous=True, disable_signals=True)
 try:
     msg = rospy.wait_for_message("/piper_x/feedback_status", String, timeout=1.0)
     payload = json.loads(msg.data)
-    print("pyagxarm_connected:", payload.get("connected"))
-    print("pyagxarm_feedback_valid:", payload.get("feedback_valid"))
-    print("pyagxarm_feedback_age_s:", payload.get("feedback_age_s"))
-    print("pyagxarm_source_id:", payload.get("source_id"))
-    print("pyagxarm_joint_mapping_version:", payload.get("joint_mapping_version"))
-    print("pyagxarm_commit:", payload.get("teleop_repo_commit"))
-    print("pyagxarm_arm_model:", payload.get("arm_model"))
-    print("pyagxarm_firmware_profile:", payload.get("firmware_profile"))
-    print("pyagxarm_joint_values:", payload.get("positions_rad"))
-    print("pyagxarm_no_motion_commands_sent:", payload.get("no_motion_commands_sent"))
+    print("feedback_adapter_type:", payload.get("adapter_type"))
+    print("passive_socketcan_connected:", payload.get("connected"))
+    print("passive_socketcan_feedback_valid:", payload.get("feedback_valid"))
+    print("passive_socketcan_feedback_age_s:", payload.get("feedback_age_s"))
+    print("passive_socketcan_source_id:", payload.get("source_id"))
+    print("passive_socketcan_joint_mapping_version:", payload.get("joint_mapping_version"))
+    print("passive_socketcan_dependency_commit:", payload.get("dependency_commit"))
+    print("passive_socketcan_source_can_ids:", payload.get("source_can_ids"))
+    print("passive_socketcan_raw_joint_values:", payload.get("raw_joint_values"))
+    print("passive_socketcan_joint_values:", payload.get("positions_rad"))
+    print("passive_socketcan_tx_frames_sent_by_bridge:", payload.get("tx_frames_sent_by_bridge"))
+    print("passive_socketcan_no_motion_commands_sent:", payload.get("no_motion_commands_sent"))
     if payload.get("error"):
-        print("pyagxarm_error:", payload.get("error"))
+        print("passive_socketcan_error:", payload.get("error"))
 except Exception as exc:
-    print(f"pyagxarm_feedback_status: not_ready ({exc})")
+    print(f"passive_socketcan_feedback_status: not_ready ({exc})")
 PY
 
 echo "joint-state publishers:"
@@ -203,9 +205,9 @@ for pose in required + diagnostic:
     else:
         meta = payload.get("metadata") or {}
         required = {
-            "feedback_source_id": "piper_x_pyagxarm_readonly_v1",
-            "joint_mapping_version": "piper_x_pyagxarm_joint_order_rad_v1",
-            "pyagxarm_commit": "9eec6e26d927a495efaaa0e7e5af2895310caefe",
+            "feedback_source_id": "piper_x_passive_socketcan_feedback_v1",
+            "joint_mapping_version": "piper_x_lora_feedback_2a5_2a6_2a7_raw001deg_to_rad_v1",
+            "dependency_commit": "521c9c5fdfd9ee63bd96c0f9342fca6b2398092e",
         }
         missing = [k for k in required if k not in meta]
         mismatch = [k for k, v in required.items() if k in meta and str(meta.get(k)) != v]
@@ -223,7 +225,7 @@ PY
 echo "physical_execution_enabled: false (committed config default)"
 echo "rejected_handeye_transform_used_for_targeting: false"
 echo "mock_ready: true"
-echo "live_read_only_ready: requires camera image, aruco debug image, /piper_x/joint_states, pyAgxArm valid feedback, and move_group; marker pose additionally requires marker ID 6 visible"
+echo "live_read_only_ready: requires camera image, aruco debug image, /piper_x/joint_states, passive SocketCAN valid feedback, and no stale normal-PiPER joint-state authority; marker pose additionally requires marker ID 6 visible"
 echo "live_planning_ready: see staging_test_planning_ready, fixed_touch_planning_ready, and home_transit_diagnostic_ready"
 echo "physical_execution_blocked: true"
 echo "physical_execution_ready: false"

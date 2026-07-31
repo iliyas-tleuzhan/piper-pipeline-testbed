@@ -30,9 +30,9 @@ def _config():
 def _poses(joint_names=None):
     names = list(joint_names or EXPECTED_JOINT_NAMES)
     metadata = {
-        "feedback_source_id": "piper_x_pyagxarm_readonly_v1",
-        "joint_mapping_version": "piper_x_pyagxarm_joint_order_rad_v1",
-        "pyagxarm_commit": "9eec6e26d927a495efaaa0e7e5af2895310caefe",
+        "feedback_source_id": "piper_x_passive_socketcan_feedback_v1",
+        "joint_mapping_version": "piper_x_lora_feedback_2a5_2a6_2a7_raw001deg_to_rad_v1",
+        "dependency_commit": "521c9c5fdfd9ee63bd96c0f9342fca6b2398092e",
     }
     return {
         "staging": TaughtPose("staging", names, [0.025, -0.045, -0.075, 0.015, 0.045, 0.015], "test", metadata),

@@ -11,9 +11,9 @@ from typing import Any, Protocol
 import yaml
 
 from piper_on_bunker.mission_logging import MissionLogger
+from piper_on_bunker.hardware.piper_x_feedback import PIPER_X_DECODER_COMMIT
 from piper_on_bunker.hardware.piper_x_feedback import PIPER_X_FEEDBACK_SOURCE_ID
 from piper_on_bunker.hardware.piper_x_feedback import PIPER_X_JOINT_MAPPING_VERSION
-from piper_on_bunker.hardware.piper_x_feedback import PIPER_X_TELEOP_COMMIT
 
 
 EXPECTED_MARKER_DICTIONARY = "DICT_ARUCO_ORIGINAL"
@@ -174,7 +174,7 @@ class TouchConfig:
     authoritative_joint_state_topic: str
     required_feedback_source_id: str
     required_joint_mapping_version: str
-    required_pyagxarm_commit: str
+    required_dependency_commit: str
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "TouchConfig":
@@ -245,7 +245,7 @@ class TouchConfig:
             ),
             required_feedback_source_id=str(data.get("feedback", {}).get("required_feedback_source_id", PIPER_X_FEEDBACK_SOURCE_ID)),
             required_joint_mapping_version=str(data.get("feedback", {}).get("required_joint_mapping_version", PIPER_X_JOINT_MAPPING_VERSION)),
-            required_pyagxarm_commit=str(data.get("feedback", {}).get("required_pyagxarm_commit", PIPER_X_TELEOP_COMMIT)),
+            required_dependency_commit=str(data.get("feedback", {}).get("required_dependency_commit", PIPER_X_DECODER_COMMIT)),
         )
 
 
@@ -1155,7 +1155,7 @@ class MoveItArucoTouchController:
         expected = {
             "feedback_source_id": self.config.required_feedback_source_id,
             "joint_mapping_version": self.config.required_joint_mapping_version,
-            "pyagxarm_commit": self.config.required_pyagxarm_commit,
+            "dependency_commit": self.config.required_dependency_commit,
         }
         missing = [name for name in expected if name not in metadata]
         if missing:

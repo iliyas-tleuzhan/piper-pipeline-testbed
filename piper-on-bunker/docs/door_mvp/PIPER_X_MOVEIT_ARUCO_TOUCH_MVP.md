@@ -66,6 +66,18 @@ Current conservative defaults:
 
 The normal PiPER ROS driver topic `/joint_states_single` is rejected for this PiPER-X runtime. A live failure showed raw CAN traffic on IDs including `2A2..2A8`, `251..256`, and `261..266`, while `/piper_ctrl_single_node` published fresh all-zero `/joint_states_single` and `/end_pose`. Fresh timestamps with all-zero values are not valid evidence of a stationary PiPER-X arm when the source cannot prove it decoded real PiPER-X feedback.
 
+Current feedback implementation:
+
+- Adapter: passive SocketCAN RX-only
+- Source decoder repository: `/home/dase-hw101/Iliyas/piper-lora-teleop-bridge`
+- Source decoder commit: `521c9c5fdfd9ee63bd96c0f9342fca6b2398092e`
+- CAN IDs: `0x2A5`, `0x2A6`, `0x2A7`
+- Raw format: two signed big-endian int32 values per frame
+- Units: raw `0.001 degrees`, converted to radians
+- Joint order: `0x2A5 -> joint1,joint2`, `0x2A6 -> joint3,joint4`, `0x2A7 -> joint5,joint6`
+
+This bridge initially publishes only `/piper_x/joint_states` and `/piper_x/feedback_status`. It must not be relayed to `/joint_states` until the manual joint-by-joint verification below passes and a verification artifact is recorded.
+
 Cartesian press settings remain only under `future_cartesian_mode.enabled: false`. They are not active in v1 because PiPER-X FK/URDF is not verified.
 
 The PiPER-X model remains unverified. The candidate URDF is:
@@ -149,6 +161,7 @@ Start ROS and MoveIt without physical execution:
 
 ```bash
 cd ~/piper-pipeline-testbed
+./tools/install_piper_x_feedback_dependency.sh
 ./tools/start_piper_x_moveit_aruco_touch_runtime.sh
 ```
 
@@ -170,9 +183,10 @@ Verify:
 
 - MoveIt model appears in RViz as PiPER-X, not the normal PiPER arm.
 - Readiness reports `robot_description_name: piper_x`.
-- Readiness reports `/piper_x/joint_states: ok` and `pyagxarm_feedback_valid: True`.
+- Readiness reports `/piper_x/joint_states: ok` and `passive_socketcan_feedback_valid: True`.
 - `/joint_states_single` is not the MoveIt state authority.
-- Exactly one publisher owns `/joint_states`, and it is the PiPER-X read-only feedback bridge.
+- Until manual verification is complete, `/joint_states` should not be relayed from the new bridge.
+- If `/joint_states` is still published by `/piper_x_arm_joint_state_relay`, stale normal-PiPER state is still present and planning is blocked.
 - Each physical joint matches RViz when moved manually through the separate proven teleoperation setup.
 - The current normal-PiPER URDF is not assumed correct for PiPER-X.
 - ArUco ID 6 is visible.
@@ -197,6 +211,7 @@ Manual joint-by-joint feedback verification:
 4. Verify only `joint1` changes in `/piper_x/joint_states`, with the expected sign and approximate magnitude.
 5. Repeat for `joint2` through `joint6`.
 6. Compare the bridge values against the working teleoperation program.
+7. Save the before/after samples and hash that verification artifact before recapturing taught poses.
 
 Do not automate this movement from this repository.
 
@@ -245,9 +260,11 @@ Repeat for `pre_touch`, `touch`, and `retract`.
 
 Any pose captured before the `/piper_x/joint_states` bridge was verified is invalidated and must be recaptured. Future taught poses must include:
 
-- `feedback_source_id: piper_x_pyagxarm_readonly_v1`
-- `pyagxarm_commit: 9eec6e26d927a495efaaa0e7e5af2895310caefe`
-- `joint_mapping_version: piper_x_pyagxarm_joint_order_rad_v1`
+- `feedback_source_id: piper_x_passive_socketcan_feedback_v1`
+- `feedback_adapter_type: passive_socketcan`
+- `dependency_commit: 521c9c5fdfd9ee63bd96c0f9342fca6b2398092e`
+- `source_can_ids: 0x2A5, 0x2A6, 0x2A7`
+- `joint_mapping_version: piper_x_lora_feedback_2a5_2a6_2a7_raw001deg_to_rad_v1`
 - source topic `/piper_x/joint_states`
 
 The existing local manifest is not deleted, but the planner refuses old poses that lack this source identity.

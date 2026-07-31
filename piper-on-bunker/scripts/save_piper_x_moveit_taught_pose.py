@@ -77,9 +77,11 @@ def main() -> int:
     print(json.dumps({"about_to_save": args.pose_name, "joint_state": snapshot.__dict__, "joint_limit_validation": teaching_validation, "motion_commanded": False}, indent=2, sort_keys=True))
     pose_metadata = {
         "feedback_source_id": config.required_feedback_source_id,
-        "pyagxarm_commit": config.required_pyagxarm_commit,
+        "feedback_adapter_type": "passive_socketcan",
+        "dependency_commit": config.required_dependency_commit,
         "arm_model": "agilex_piper_x",
-        "firmware_profile": "unresolved_read_only_feedback_only",
+        "firmware_profile": "unresolved_passive_feedback_only",
+        "source_can_ids": ["0x2A5", "0x2A6", "0x2A7"],
         "joint_mapping_version": config.required_joint_mapping_version,
         "source_topic": snapshot.source_topic,
         "source_stamp_s": snapshot.stamp_s,
@@ -101,7 +103,8 @@ def main() -> int:
         "source_topic": snapshot.source_topic,
         "source_stamp_s": snapshot.stamp_s,
         "feedback_source_id": config.required_feedback_source_id,
-        "pyagxarm_commit": config.required_pyagxarm_commit,
+        "feedback_adapter_type": "passive_socketcan",
+        "dependency_commit": config.required_dependency_commit,
         "joint_mapping_version": config.required_joint_mapping_version,
         "motion_commanded": False,
     }

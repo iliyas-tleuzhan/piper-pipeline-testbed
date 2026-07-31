@@ -1080,16 +1080,16 @@ class MoveItArucoTouchController:
             raise ValueError("configured marker ID must be 6")
         if abs(self.config.marker_size_m - EXPECTED_MARKER_SIZE_M) > 1e-9:
             raise ValueError("configured marker size must be 0.100 m")
-        if self.config.velocity_scaling > 0.05 or self.config.acceleration_scaling > 0.05:
-            raise ValueError("velocity and acceleration scaling must remain <= 0.05")
+        if self.config.velocity_scaling > 0.25 or self.config.acceleration_scaling > 0.20:
+            raise ValueError("velocity and acceleration scaling must remain <= 0.25 velocity and <= 0.20 acceleration")
         if require_taught_poses:
             for pose_name in self._required_pose_names(sequence):
                 pose = self._pose(pose_name)
                 self._validate_taught_pose_source(pose)
                 validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits, tolerance_rad=self.config.taught_pose_limit_tolerance_rad)
         for name, profile in self.config.motion_profiles.items():
-            if float(profile["velocity_scaling"]) > 0.10 or float(profile["acceleration_scaling"]) > 0.10:
-                raise ValueError(f"motion profile {name} scaling must remain <= 0.10")
+            if float(profile["velocity_scaling"]) > 0.25 or float(profile["acceleration_scaling"]) > 0.20:
+                raise ValueError(f"motion profile {name} scaling must remain <= 0.25 velocity and <= 0.20 acceleration")
             if float(profile["velocity_scaling"]) <= 0.0 or float(profile["acceleration_scaling"]) <= 0.0:
                 raise ValueError(f"motion profile {name} scaling must be positive")
 

@@ -10,6 +10,8 @@ CAMERA_SERIAL=${CAMERA_SERIAL:-243322074578}
 AGX_ARM_URDF_HOST=${AGX_ARM_URDF_HOST:-/home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf}
 STAGED_ROS_PKGS=${STAGED_ROS_PKGS:-/tmp/piper_x_moveit_ros}
 PIPER_X_JOINT3_UPPER_OVERRIDE_RAD=${PIPER_X_JOINT3_UPPER_OVERRIDE_RAD:-0.02}
+PIPER_X_MOVEIT_SPEED_PERCENT=${PIPER_X_MOVEIT_SPEED_PERCENT:-30}
+PIPER_X_MOVEIT_COMMAND_RATE_HZ=${PIPER_X_MOVEIT_COMMAND_RATE_HZ:-50}
 
 cd "$(dirname "$0")/.."
 
@@ -121,7 +123,7 @@ ROS_PREFIX="source /opt/ros/noetic/setup.bash; source /root/ABot-Claw/robot_laye
 
 tmux new-window -t "$SESSION" -n piper_x_feedback "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX export PYTHONPATH=/root/piper-pipeline-testbed/piper-on-bunker/src:\${PYTHONPATH:-}; python3 /root/piper-pipeline-testbed/piper-on-bunker/scripts/piper_x_passive_socketcan_joint_state_bridge.py --can can0 --joint-topic /piper_x/joint_states'"
 tmux new-window -t "$SESSION" -n joint_relay "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX while ! timeout 2 rostopic echo -n 1 /piper_x/joint_states >/dev/null 2>&1; do echo waiting for /piper_x/joint_states; sleep 1; done; python3 /root/piper-pipeline-testbed/piper-on-bunker/scripts/relay_piper_x_arm_joint_states.py --input-topic /piper_x/joint_states --output-topic /joint_states'"
-tmux new-window -t "$SESSION" -n trajectory_controller "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX export PYTHONPATH=/root/piper-pipeline-testbed/piper-on-bunker/src:\${PYTHONPATH:-}; while ! timeout 2 rostopic echo -n 1 /joint_states >/dev/null 2>&1; do echo waiting for /joint_states; sleep 1; done; python3 /root/piper-pipeline-testbed/piper-on-bunker/scripts/piper_x_moveit_sdk_trajectory_controller.py --feedback-topic /joint_states --can can0 --speed-percent 10'"
+tmux new-window -t "$SESSION" -n trajectory_controller "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX export PYTHONPATH=/root/piper-pipeline-testbed/piper-on-bunker/src:\${PYTHONPATH:-}; while ! timeout 2 rostopic echo -n 1 /joint_states >/dev/null 2>&1; do echo waiting for /joint_states; sleep 1; done; python3 /root/piper-pipeline-testbed/piper-on-bunker/scripts/piper_x_moveit_sdk_trajectory_controller.py --feedback-topic /joint_states --can can0 --speed-percent $PIPER_X_MOVEIT_SPEED_PERCENT --command-rate-hz $PIPER_X_MOVEIT_COMMAND_RATE_HZ'"
 tmux new-window -t "$SESSION" -n move_group "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX while ! timeout 2 rostopic echo -n 1 /joint_states >/dev/null 2>&1; do echo waiting for /joint_states; sleep 1; done; roslaunch piper_x_moveit_config planning_only.launch use_rviz:=false info:=true'"
 tmux new-window -t "$SESSION" -n d435i_wrist "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX cd /root/ABot-Claw/robot_layer/arm_piper/agent_server; python3 realsense_d555_py_publisher.py --camera wrist_camera --serial $CAMERA_SERIAL --width 640 --height 480 --fps 15'"
 tmux new-window -t "$SESSION" -n image_rectify "docker exec -i $CONTAINER bash -lc '$ROS_PREFIX while ! timeout 2 rostopic echo -n 1 /wrist_camera/color/image_raw >/dev/null 2>&1; do echo waiting for wrist raw image; sleep 1; done; rosrun image_proc image_proc __name:=image_proc __ns:=/wrist_camera/color'"
@@ -151,6 +153,8 @@ echo "MoveIt bounds override: joint3 upper -> $PIPER_X_JOINT3_UPPER_OVERRIDE_RAD
 echo "PiPER-X FK/model verification: false; taught-joint execution does not use FK/hand-eye targeting"
 echo "MoveIt joint-state authority: /piper_x/joint_states -> /joint_states"
 echo "MoveIt trajectory controller: /arm_controllers/follow_joint_trajectory -> piper_sdk JointCtrl on first execution goal"
+echo "MoveIt SDK speed percent: $PIPER_X_MOVEIT_SPEED_PERCENT"
+echo "MoveIt command streaming rate: $PIPER_X_MOVEIT_COMMAND_RATE_HZ Hz"
 echo "Marker contract: $MARKER_DICTIONARY ID $MARKER_ID size $MARKER_SIZE_M m"
 echo
 echo "Readiness:"

@@ -133,6 +133,9 @@ if rosnode list 2>/dev/null | grep -qx /piper_x_moveit_sdk_trajectory_controller
   echo "sdk_command_primitive: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/sdk_command_primitive 2>/dev/null || echo unavailable)"
   echo "connects_on_first_goal: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/connects_on_first_goal 2>/dev/null || echo unavailable)"
   echo "motion_commanded_at_startup: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/motion_commanded_at_startup 2>/dev/null || echo unavailable)"
+  echo "speed_percent: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/speed_percent 2>/dev/null || echo unavailable)"
+  echo "command_rate_hz: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/command_rate_hz 2>/dev/null || echo unavailable)"
+  echo "endpoint_tolerance_rad: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/endpoint_tolerance_rad 2>/dev/null || echo unavailable)"
 else
   echo "node: not_ready"
 fi

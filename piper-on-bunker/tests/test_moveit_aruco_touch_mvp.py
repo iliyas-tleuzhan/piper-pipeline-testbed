@@ -360,6 +360,59 @@ def test_excessive_segment_duration_rejected():
     assert result.outputs["partial_plans"][0]["metrics"]["total_duration_s"] == 100.0
 
 
+def test_local_physical_profile_accepts_long_joint_limit_valid_touch_plan():
+    class LongTouchBackend(MockMoveItTouchBackend):
+        def plan_joint_pose(self, name, pose, config, *, start_state, motion_profile):
+            duration = 88.0 if name == "move_touch" else 2.0
+            metrics = linear_trajectory_metrics(
+                joint_names=list(pose.joint_names),
+                start_positions=list(start_state.positions),
+                target_positions=list(pose.positions),
+                duration_s=duration,
+            )
+            return PlanSummary(
+                name,
+                True,
+                metrics.trajectory_points,
+                estimated_duration_s=metrics.total_duration_s,
+                maximum_joint_delta_rad=metrics.maximum_joint_delta_rad,
+                maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
+                execution_capable=True,
+                metrics=metrics.__dict__,
+            )
+
+    cfg = replace(
+        _config(),
+        physical_execution_enabled_by_default=True,
+        motion_profiles={
+            "transit": {"velocity_scaling": 0.25, "acceleration_scaling": 0.20},
+            "approach": {"velocity_scaling": 0.15, "acceleration_scaling": 0.12},
+            "touch": {"velocity_scaling": 0.10, "acceleration_scaling": 0.08},
+            "retract": {"velocity_scaling": 0.15, "acceleration_scaling": 0.12},
+        },
+        segment_duration_limits_s={
+            "move_staging": 120.0,
+            "move_pre_touch": 120.0,
+            "move_touch": 120.0,
+            "move_retract": 120.0,
+            "move_staging_final": 120.0,
+        },
+        max_segment_duration_s=120.0,
+        max_mission_duration_s=300.0,
+        min_effective_joint_velocity_rad_s=0.0,
+    )
+    result = MoveItArucoTouchController(cfg, LongTouchBackend(), taught_poses=_poses()).run(
+        planning_only=False,
+        execute=True,
+        confirm="FIXED_ARUCO_TOUCH",
+        sequence="fixed_touch",
+    )
+    assert result.success
+    touch_plan = [plan for plan in result.outputs["plans"] if plan["name"] == "move_touch"][0]
+    assert touch_plan["estimated_duration_s"] == pytest.approx(88.0)
+    assert touch_plan["duration_gate_passed"] is True
+
+
 def test_discontinuous_segment_start_rejected():
     class DiscontinuousBackend(MockMoveItTouchBackend):
         def plan_joint_pose(self, name, pose, config, *, start_state, motion_profile):

@@ -248,8 +248,8 @@ def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) ->
         mag = min(float(distance_m), index * config.simple_forward_step_m)
         waypoints.append(_pose_translated_in_world(current, [axis[0] * mag, axis[1] * mag, axis[2] * mag]))
     plan, fraction = group.compute_cartesian_path(waypoints, float(config.cartesian_eef_step_m), 0.0)
-    if float(fraction) < float(config.cartesian_fraction_threshold):
-        raise RuntimeError(f"continuous forward Cartesian fraction {fraction:.3f} below {config.cartesian_fraction_threshold:.3f}")
+    if float(fraction) <= 0.0:
+        raise RuntimeError("continuous forward Cartesian planner returned zero usable path")
 
     thread = threading.Thread(target=watch_depth, daemon=True)
     thread.start()
@@ -267,6 +267,9 @@ def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) ->
         "name": "continuous_forward_until_depth",
         "planned_forward_distance_m": float(distance_m),
         "cartesian_fraction": float(fraction),
+        "cartesian_fraction_warning": None
+        if float(fraction) >= float(config.cartesian_fraction_threshold)
+        else f"executed partial Cartesian path fraction {fraction:.3f}; continuing command did not fail on fraction",
         "moveit_execute_returned": ok,
         "depth_stop_triggered": bool(monitor["triggered"]),
         "depth_monitor": monitor,
@@ -300,7 +303,9 @@ def _live_align_then_depth_touch(config_path: str, confirm: str) -> dict[str, An
 
     actions: list[dict[str, Any]] = []
     last_report: dict[str, Any] | None = None
-    for index in range(config.max_alignment_iterations):
+    index = 0
+    while not rospy.is_shutdown():
+        index += 1
         report, estimate = _capture_estimate(config)
         last_report = report
         blockers = _execution_blockers(config, estimate, allow_not_centered=True)
@@ -425,12 +430,10 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
             actions.append({"name": "vertical_alignment_complete", "iteration": index, "pixel_error_uv": list(estimate.pixel_error_uv)})
             break
         vertical_step = config.simple_up_step_m if vertical_error < 0.0 else -config.simple_up_step_m
-        action = _execute_world_delta(group, config, name=f"vertical_align_step_{index + 1}", delta_world_m=[0.0, 0.0, vertical_step])
+        action = _execute_world_delta(group, config, name=f"vertical_align_step_{index}", delta_world_m=[0.0, 0.0, vertical_step])
         action["vertical_component_m"] = vertical_step
         action["pixel_error_uv"] = list(estimate.pixel_error_uv)
         actions.append(action)
-    else:
-        raise RuntimeError("vertical alignment did not converge before max_alignment_iterations")
 
     center_depth_report = _capture_center_depth(config)
     estimates.append({"forward_depth_precheck": center_depth_report})

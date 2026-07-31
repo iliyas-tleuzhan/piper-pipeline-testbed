@@ -1,0 +1,59 @@
+profile_id: piper_x_moveit_touch_aruco_fixed_v1
+task_id: touch_fixed_aruco_original_id6_v1
+
+marker:
+  dictionary: DICT_ARUCO_ORIGINAL
+  id: 6
+  size_m: 0.100
+
+camera:
+  image_topic: /wrist_camera/color/image_rect_color
+  marker_pose_topic: /aruco_simple/pose
+
+moveit:
+  planning_group: arm
+  end_effector_link: gripper_tcp
+  planning_frame: base_link
+  move_group_required: true
+
+taught_poses:
+  home: home
+  pre_touch: pre_touch
+  safe_recovery: safe_recovery
+  manifest: piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml
+
+motion:
+  touch_direction_ee: [0.0, 0.0, 1.0]
+  press_distance_m: 0.020
+  hold_duration_s: 1.0
+  retract_distance_m: 0.020
+  velocity_scaling: 0.05
+  acceleration_scaling: 0.05
+  planning_timeout_s: 10.0
+  execution_timeout_s: 20.0
+  cartesian_fraction_threshold: 1.0
+  max_joint_jump_rad: 0.20
+
+safety:
+  max_marker_pose_age_s: 0.5
+  max_image_age_s: 0.5
+  max_joint_state_age_s: 0.5
+  marker_stability_required_s: 0.5
+  physical_execution_enabled_by_default: false
+  joint_limits:
+    joint1: [-2.618, 2.618]
+    joint2: [-2.618, 2.618]
+    joint3: [-2.967, 0.0]
+    joint4: [-1.745, 1.745]
+    joint5: [-1.22, 1.22]
+    joint6: [-2.094, 2.094]
+  workspace_limits:
+    x_m: [-0.10, 0.70]
+    y_m: [-0.40, 0.40]
+    z_m: [0.02, 0.80]
+
+robot_model:
+  model: agilex_piper_x_unverified
+  urdf_candidate_path: /home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_description.urdf
+  urdf_candidate_sha256: 34126caac7d5b37bc2409f337ac246afbe0bb8cd47fc9f16df5038f19bd21e3a
+  piper_x_model_verified: false

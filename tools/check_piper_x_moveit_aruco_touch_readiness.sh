@@ -117,6 +117,26 @@ for topic in ["/piper_x/joint_states", "/joint_states", "/joint_states_single"]:
     print(f"{topic}: publishers={pubs}")
 PY
 
+echo "moveit execution controller:"
+echo "/move_group/moveit_controller_manager: $(rosparam get /move_group/moveit_controller_manager 2>/dev/null || echo unavailable)"
+echo "/move_group/controller_list:"
+rosparam get /move_group/controller_list 2>/dev/null || echo unavailable
+for t in /arm_controllers/follow_joint_trajectory/goal /arm_controllers/follow_joint_trajectory/result /arm_controllers/follow_joint_trajectory/status /arm_controllers/follow_joint_trajectory/cancel; do
+  rostopic info "$t" >/dev/null 2>&1 && echo "$t: ok" || echo "$t: not_ready"
+done
+echo "piper_x_sdk_trajectory_controller:"
+if rosnode list 2>/dev/null | grep -qx /piper_x_moveit_sdk_trajectory_controller; then
+  echo "node: ok"
+  echo "controller_type: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/controller_type 2>/dev/null || echo unavailable)"
+  echo "feedback_topic: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/feedback_topic 2>/dev/null || echo unavailable)"
+  echo "can_interface: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/can_interface 2>/dev/null || echo unavailable)"
+  echo "sdk_command_primitive: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/sdk_command_primitive 2>/dev/null || echo unavailable)"
+  echo "connects_on_first_goal: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/connects_on_first_goal 2>/dev/null || echo unavailable)"
+  echo "motion_commanded_at_startup: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/motion_commanded_at_startup 2>/dev/null || echo unavailable)"
+else
+  echo "node: not_ready"
+fi
+
 echo "aruco dictionary: $(rosparam get /aruco_simple/dictionary 2>/dev/null || echo unknown)"
 echo "aruco marker_id: $(rosparam get /aruco_simple/marker_id 2>/dev/null || echo unknown)"
 echo "aruco marker_size: $(rosparam get /aruco_simple/marker_size 2>/dev/null || echo unknown)"
@@ -222,10 +242,32 @@ print(f"fixed_touch_planning_ready: {all(status.get(p) for p in ['staging', 'pre
 print(f"home_transit_diagnostic_ready: {all(status.get(p) for p in ['home', 'pre_touch', 'retract'])}")
 PY
 
-echo "physical_execution_enabled: false (committed config default)"
+python3 - <<'PY'
+from pathlib import Path
+
+import yaml
+
+paths = [
+    Path("piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.local.yaml"),
+    Path("piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml"),
+]
+selected = None
+data = {}
+for path in paths:
+    if path.exists():
+        selected = path
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        break
+enabled = bool(((data.get("safety") or {}).get("physical_execution_enabled_by_default")))
+if selected and selected.name.endswith(".local.yaml"):
+    source = "ignored local config"
+else:
+    source = "committed config default"
+print(f"physical_execution_config: {selected if selected else 'missing'}")
+print(f"physical_execution_enabled: {str(enabled).lower()} ({source})")
+PY
 echo "rejected_handeye_transform_used_for_targeting: false"
 echo "mock_ready: true"
 echo "live_read_only_ready: requires camera image, aruco debug image, /piper_x/joint_states, passive SocketCAN valid feedback, and no stale normal-PiPER joint-state authority; marker pose additionally requires marker ID 6 visible"
 echo "live_planning_ready: see staging_test_planning_ready, fixed_touch_planning_ready, and home_transit_diagnostic_ready"
-echo "physical_execution_blocked: true"
-echo "physical_execution_ready: false"
+echo "physical_execution_ready_requires: ignored local execution config, fresh passive /joint_states relay, arm_controllers FollowJointTrajectory action server, new verified-source taught poses, marker ID 6 visible, successful planning-only review, and explicit confirmation"

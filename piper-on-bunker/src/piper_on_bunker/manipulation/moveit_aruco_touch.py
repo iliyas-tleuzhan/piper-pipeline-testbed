@@ -659,6 +659,27 @@ class RosMoveItJointSequenceBackend:
         motion_profile: dict[str, float],
     ) -> PlanSummary:
         try:
+            if max(abs(float(goal) - float(start)) for goal, start in zip(pose.positions, start_state.positions)) <= 1e-4:
+                metrics = _trajectory_metrics_from_arrays(
+                    joint_names=list(pose.joint_names),
+                    start_positions=list(start_state.positions),
+                    target_positions=list(pose.positions),
+                    point_positions=[list(start_state.positions)],
+                    point_times_s=[0.0],
+                )
+                return PlanSummary(
+                    name,
+                    True,
+                    metrics.trajectory_points,
+                    estimated_duration_s=0.0,
+                    maximum_joint_delta_rad=metrics.maximum_joint_delta_rad,
+                    maximum_adjacent_joint_delta_rad=metrics.maximum_adjacent_joint_delta_rad,
+                    execution_capable=True,
+                    metrics=_metrics_to_dict(metrics),
+                    reason="already at taught target",
+                    velocity_scaling=float(motion_profile["velocity_scaling"]),
+                    acceleration_scaling=float(motion_profile["acceleration_scaling"]),
+                )
             group = self._get_group(motion_profile=motion_profile)
             if list(group.get_active_joints()) != list(pose.joint_names):
                 return PlanSummary(name, False, 0, reason=f"MoveIt active joints {group.get_active_joints()} do not match taught pose {pose.joint_names}")
@@ -692,6 +713,8 @@ class RosMoveItJointSequenceBackend:
             return PlanSummary(name, False, 0, reason=f"MoveIt planning failed: {exc!r}")
 
     def execute_plan(self, plan: PlanSummary, timeout_s: float) -> bool:
+        if plan.metrics and not bool(plan.metrics.get("nonzero_motion", True)):
+            return True
         if self._last_plan is None:
             return False
         try:
@@ -970,8 +993,6 @@ class MoveItArucoTouchController:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "home_transit_diagnostic is planning-only until separately verified", planning_only, False)
             if not self.config.physical_execution_enabled_by_default:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "physical execution disabled in committed config", planning_only, False)
-            if not self.config.piper_x_model_verified:
-                return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "PiPER-X model/FK is not verified; physical execution remains blocked", planning_only, False)
 
         try:
             self._preflight(require_taught_poses=True, sequence=sequence)

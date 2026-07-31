@@ -171,12 +171,25 @@ def test_wrong_dictionary_blocks_touch():
 
 
 def test_emergency_stop_called_on_execution_failure():
-    cfg = replace(_config(), physical_execution_enabled_by_default=True, piper_x_model_verified=True)
+    cfg = replace(_config(), physical_execution_enabled_by_default=True, piper_x_model_verified=False)
     backend = MockMoveItTouchBackend(execute_ok=False)
     controller = MoveItArucoTouchController(cfg, backend, taught_poses=_poses())
     result = controller.run(planning_only=False, execute=True, confirm="FIXED_ARUCO_TOUCH")
     assert not result.success
     assert backend.stopped is True
+
+
+def test_taught_joint_execution_does_not_require_fk_verification():
+    cfg = replace(_config(), physical_execution_enabled_by_default=True, piper_x_model_verified=False)
+    backend = MockMoveItTouchBackend()
+    result = MoveItArucoTouchController(cfg, backend, taught_poses=_poses()).run(
+        planning_only=False,
+        execute=True,
+        confirm="STAGING_TEST",
+        sequence="staging_test",
+    )
+    assert result.success
+    assert backend.executed == ["move_staging", "move_pre_touch", "move_retract", "move_staging_final"]
 
 
 def test_restricted_api_rejects_arbitrary_targets():

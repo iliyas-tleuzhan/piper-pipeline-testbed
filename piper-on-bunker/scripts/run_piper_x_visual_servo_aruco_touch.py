@@ -137,6 +137,16 @@ def _pose_translated_in_gripper_frame(pose: Any, delta_gripper_m: list[float]) -
     return waypoint
 
 
+def _pose_translated_in_world(pose: Any, delta_world_m: list[float]) -> Any:
+    from copy import deepcopy
+
+    waypoint = deepcopy(pose)
+    waypoint.position.x = float(pose.position.x + float(delta_world_m[0]))
+    waypoint.position.y = float(pose.position.y + float(delta_world_m[1]))
+    waypoint.position.z = float(pose.position.z + float(delta_world_m[2]))
+    return waypoint
+
+
 def _execute_cartesian_delta(group: Any, config: Any, *, name: str, delta_gripper_m: list[float]) -> dict[str, Any]:
     current = group.get_current_pose(config.end_effector_link).pose
     waypoint = _pose_translated_in_gripper_frame(current, delta_gripper_m)
@@ -152,6 +162,19 @@ def _execute_cartesian_delta(group: Any, config: Any, *, name: str, delta_grippe
     if not ok:
         raise RuntimeError(f"{name} MoveIt execute returned false")
     return {"name": name, "delta_gripper_m": [float(v) for v in delta_gripper_m], "cartesian_fraction": float(fraction)}
+
+
+def _execute_world_delta(group: Any, config: Any, *, name: str, delta_world_m: list[float]) -> dict[str, Any]:
+    current = group.get_current_pose(config.end_effector_link).pose
+    waypoint = _pose_translated_in_world(current, delta_world_m)
+    plan, fraction = group.compute_cartesian_path([waypoint], float(config.cartesian_eef_step_m), 0.0)
+    if float(fraction) < float(config.cartesian_fraction_threshold):
+        raise RuntimeError(f"{name} Cartesian fraction {fraction:.3f} below {config.cartesian_fraction_threshold:.3f}")
+    ok = bool(group.execute(plan, wait=True))
+    group.stop()
+    if not ok:
+        raise RuntimeError(f"{name} MoveIt execute returned false")
+    return {"name": name, "delta_world_m": [float(v) for v in delta_world_m], "cartesian_fraction": float(fraction)}
 
 
 def _execution_blockers(config: Any, estimate: Any, *, allow_not_centered: bool) -> list[str]:
@@ -215,16 +238,68 @@ def _live_align_then_depth_touch(config_path: str, confirm: str) -> dict[str, An
     }
 
 
+def _live_simple_up_then_forward(config_path: str, confirm: str) -> dict[str, Any]:
+    import moveit_commander
+    import rospy
+
+    if confirm != "SIMPLE_UP_FORWARD":
+        raise RuntimeError("simple up/forward execution requires --confirm SIMPLE_UP_FORWARD")
+    config = load_visual_servo_touch_config(config_path)
+    if not rospy.get_node_uri():
+        rospy.init_node("piper_x_simple_up_forward_aruco_touch", anonymous=True, disable_signals=True)
+    moveit_commander.roscpp_initialize([])
+    group = moveit_commander.MoveGroupCommander(config.planning_group)
+    group.set_end_effector_link(config.end_effector_link)
+    group.set_max_velocity_scaling_factor(0.04)
+    group.set_max_acceleration_scaling_factor(0.04)
+    actions: list[dict[str, Any]] = []
+    report, estimate = _capture_estimate(config)
+    blockers = _execution_blockers(config, estimate, allow_not_centered=True)
+    if blockers:
+        raise RuntimeError(f"simple up/forward blocked: {blockers}")
+    if estimate.pixel_error_uv is None:
+        raise RuntimeError("marker pixel error unavailable")
+    # Image v decreases when marker is above center. Move upward in world Z and
+    # then stop. This is deliberately simple and avoids gripper-frame hand-eye
+    # deltas for the alignment stage.
+    if estimate.pixel_error_uv[1] < -config.image_center_tolerance_px:
+        actions.append(_execute_world_delta(group, config, name="simple_up", delta_world_m=[0.0, 0.0, config.simple_up_step_m]))
+    elif estimate.pixel_error_uv[1] > config.image_center_tolerance_px:
+        actions.append(_execute_world_delta(group, config, name="simple_down", delta_world_m=[0.0, 0.0, -config.simple_up_step_m]))
+    else:
+        actions.append({"name": "vertical_alignment_already_in_tolerance", "pixel_error_uv": list(estimate.pixel_error_uv)})
+    post_up_report, post_up_estimate = _capture_estimate(config)
+    blockers = _execution_blockers(config, post_up_estimate, allow_not_centered=True)
+    if blockers:
+        raise RuntimeError(f"forward step blocked after up/down move: {blockers}")
+    depth = float(post_up_estimate.depth_m or 0.0)
+    forward_mag = min(config.simple_forward_step_m, max(0.0, depth - config.contact_clearance_m))
+    axis = config.simple_forward_axis_world
+    norm = sum(v * v for v in axis) ** 0.5
+    if norm <= 0.0:
+        raise RuntimeError("simple_forward_axis_world must be nonzero")
+    forward = [float(v) / norm * forward_mag for v in axis]
+    actions.append(_execute_world_delta(group, config, name="simple_forward", delta_world_m=forward))
+    return {
+        "config": config_path,
+        "mode": "simple_up_then_forward",
+        "motion_commanded": True,
+        "actions": actions,
+        "initial_estimate": report,
+        "pre_forward_estimate": post_up_report,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="piper-on-bunker/config/piper_x_visual_servo_aruco_touch.yaml")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--confirm", default="")
-    parser.add_argument("--mode", choices=["check", "align_then_depth_touch"], default="check")
+    parser.add_argument("--mode", choices=["check", "align_then_depth_touch", "simple_up_then_forward"], default="check")
     args = parser.parse_args(argv)
 
-    if args.execute and args.mode != "align_then_depth_touch":
+    if args.execute and args.mode == "check":
         print(
             json.dumps(
                 {
@@ -245,7 +320,9 @@ def main(argv: list[str] | None = None) -> int:
         print("Host Python cannot import rospy; re-running live visual-servo check inside abot-piper-noetic.", file=sys.stderr)
         return _rerun_in_container(sys.argv[1:])
     try:
-        if args.execute:
+        if args.execute and args.mode == "simple_up_then_forward":
+            report = _live_simple_up_then_forward(args.config, args.confirm)
+        elif args.execute:
             report = _live_align_then_depth_touch(args.config, args.confirm)
         else:
             report = _live_estimate(args.config)

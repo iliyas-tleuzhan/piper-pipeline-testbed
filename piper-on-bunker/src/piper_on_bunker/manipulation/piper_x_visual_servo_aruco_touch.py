@@ -48,6 +48,9 @@ class VisualServoTouchConfig:
     image_center_tolerance_px: float
     max_lateral_step_m: float
     max_forward_step_m: float
+    simple_up_step_m: float
+    simple_forward_step_m: float
+    simple_forward_axis_world: list[float]
     max_alignment_iterations: int
     cartesian_eef_step_m: float
     cartesian_fraction_threshold: float
@@ -95,6 +98,9 @@ class VisualServoTouchConfig:
             image_center_tolerance_px=float(align["image_center_tolerance_px"]),
             max_lateral_step_m=float(align["max_lateral_step_m"]),
             max_forward_step_m=float(align["max_forward_step_m"]),
+            simple_up_step_m=float(align.get("simple_up_step_m", 0.020)),
+            simple_forward_step_m=float(align.get("simple_forward_step_m", 0.020)),
+            simple_forward_axis_world=[float(v) for v in align.get("simple_forward_axis_world", [1.0, 0.0, 0.0])],
             max_alignment_iterations=int(align.get("max_alignment_iterations", 6)),
             cartesian_eef_step_m=float(align.get("cartesian_eef_step_m", 0.005)),
             cartesian_fraction_threshold=float(align.get("cartesian_fraction_threshold", 1.0)),

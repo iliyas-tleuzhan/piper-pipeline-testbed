@@ -12,8 +12,8 @@ camera:
 
 moveit:
   planning_group: arm
-  end_effector_link: gripper_tcp
-  planning_frame: base_link
+  end_effector_link: gripper_base
+  planning_frame: world
   move_group_required: true
 
 taught_poses:
@@ -59,6 +59,6 @@ safety:
 
 robot_model:
   model: agilex_piper_x_unverified
-  urdf_candidate_path: /home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_description.urdf
-  urdf_candidate_sha256: 34126caac7d5b37bc2409f337ac246afbe0bb8cd47fc9f16df5038f19bd21e3a
+  urdf_candidate_path: /home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro
+  urdf_candidate_sha256: 0ee3f52f9acf3060a7f3e439c6e5e46b6a53d4fa509dd495045548be6b7f90cd
   piper_x_model_verified: false

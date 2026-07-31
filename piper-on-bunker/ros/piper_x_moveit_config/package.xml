@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>piper_x_moveit_config</name>
+  <version>0.1.0</version>
+  <description>Planning-only MoveIt configuration for the PiPER-X fixed ArUco touch MVP.</description>
+  <maintainer email="noreply@example.com">piper-pipeline-testbed</maintainer>
+  <license>Proprietary</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+</package>

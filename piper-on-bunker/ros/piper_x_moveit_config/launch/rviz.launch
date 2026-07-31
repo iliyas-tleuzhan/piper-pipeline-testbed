@@ -1,0 +1,10 @@
+<launch>
+  <arg name="debug" default="false"/>
+  <arg unless="$(arg debug)" name="launch_prefix" value=""/>
+  <arg if="$(arg debug)" name="launch_prefix" value="gdb --ex run --args"/>
+  <arg name="rviz_config" default="$(find piper_x_moveit_config)/config/piper_x_moveit.rviz"/>
+
+  <node name="rviz" launch-prefix="$(arg launch_prefix)" pkg="rviz" type="rviz" respawn="false" output="screen" args="-d $(arg rviz_config)">
+    <env name="DISPLAY" value="$(optenv DISPLAY :0)"/>
+  </node>
+</launch>

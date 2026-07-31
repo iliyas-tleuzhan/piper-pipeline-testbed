@@ -1,0 +1,5 @@
+<launch>
+  <arg name="fake_execution_type" default="interpolate"/>
+  <rosparam file="$(find piper_x_moveit_config)/config/fake_controllers.yaml" subst_value="true"/>
+  <param name="moveit_controller_manager" value="moveit_fake_controller_manager/MoveItFakeControllerManager"/>
+</launch>

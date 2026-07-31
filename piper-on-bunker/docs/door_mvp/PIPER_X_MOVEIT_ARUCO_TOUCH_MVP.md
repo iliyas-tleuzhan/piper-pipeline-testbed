@@ -50,7 +50,7 @@ Config:
 Current conservative defaults:
 
 - Planning group: `arm`
-- End-effector link: `gripper_tcp`
+- End-effector link: `gripper_base`
 - Active motion strategy: `taught_joint_sequence`
 - Required taught poses: `home`, `pre_touch`, `touch`, `retract`
 - Hold duration: `1.0 s`
@@ -62,13 +62,29 @@ Cartesian press settings remain only under `future_cartesian_mode.enabled: false
 
 The PiPER-X model remains unverified. The candidate URDF is:
 
-`/home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_description.urdf`
+`/home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro`
 
 Expected SHA256:
 
-`34126caac7d5b37bc2409f337ac246afbe0bb8cd47fc9f16df5038f19bd21e3a`
+`0ee3f52f9acf3060a7f3e439c6e5e46b6a53d4fa509dd495045548be6b7f90cd`
 
 Do not treat this candidate as verified yet.
+
+The runtime stages the PiPER-X URDF asset package from:
+
+`/home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x`
+
+into the container under:
+
+`/tmp/piper_x_moveit_ros/agx_arm_description/agx_arm_urdf/piper_x`
+
+The launched MoveIt model must report:
+
+- `robot_description_name: piper_x`
+- `/piper_x_moveit/model_source: agx_arm_description piper_x_with_gripper_description.xacro`
+- `/piper_x_moveit/model_verified: false`
+
+If RViz shows the normal PiPER arm, close that RViz instance and reopen it with the PiPER-X helper below. Old RViz launch files from `piper_with_gripper_moveit` use the normal-PiPER visual setup and are not the correct viewer for this MVP.
 
 ## Existing MoveIt Support Audit
 
@@ -82,6 +98,8 @@ Existing PiPER MoveIt material in this repository and the ABot-Claw robot layer 
 - Historical planning frame in earlier normal-PiPER tests: `dummy_link`
 
 This MVP records those findings but does not claim the model is correct for PiPER-X. The current PiPER-X FK mismatch may also invalidate ordinary MoveIt Cartesian behavior until the correct robot model is verified.
+
+The active PiPER-X MoveIt runtime does not use the historical `gripper_tcp` endpoint for target generation. For the taught-joint sequence, `gripper_base` is the configured informational endpoint, and all motion targets are joint configurations.
 
 ## Rejected Calibration Boundary
 
@@ -133,9 +151,17 @@ cd ~/piper-pipeline-testbed
 ./tools/check_piper_x_moveit_aruco_touch_readiness.sh
 ```
 
+Open RViz with the PiPER-X model path:
+
+```bash
+cd ~/piper-pipeline-testbed
+./tools/open_piper_x_moveit_aruco_touch_rviz.sh
+```
+
 Verify:
 
-- MoveIt model appears in RViz.
+- MoveIt model appears in RViz as PiPER-X, not the normal PiPER arm.
+- Readiness reports `robot_description_name: piper_x`.
 - Each physical joint matches RViz when moved manually through the separate proven teleoperation setup.
 - The current normal-PiPER URDF is not assumed correct for PiPER-X.
 - ArUco ID 6 is visible.

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,6 +23,51 @@ from piper_on_bunker.manipulation.moveit_aruco_touch import result_to_json
 from piper_on_bunker.mission_logging import MissionLogger
 
 
+def _rospy_available() -> bool:
+    try:
+        import rospy  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _rerun_live_in_noetic_container(argv: list[str]) -> int | None:
+    if _rospy_available() or os.environ.get("PIPER_MOVEIT_ARUCO_NO_DOCKER_REEXEC") == "1":
+        return None
+    if "--live" not in argv:
+        return None
+    container = os.environ.get("ROS_CONTAINER", "abot-piper-noetic")
+    cmd = [
+        "docker",
+        "exec",
+        "-i",
+        container,
+        "bash",
+        "-lc",
+        "source /opt/ros/noetic/setup.bash && "
+        "source /root/ABot-Claw/robot_layer/arm_piper/agent_server/robot_driver_ros/devel/setup.bash 2>/dev/null || true; "
+        "export ROS_PACKAGE_PATH=/root/piper-pipeline-testbed/piper-on-bunker/ros:/tmp/piper_x_moveit_ros:${ROS_PACKAGE_PATH:-}; "
+        "cd /root/piper-pipeline-testbed && "
+        "python3 piper-on-bunker/scripts/run_moveit_aruco_touch.py "
+        + " ".join(subprocess.list2cmdline([arg]) for arg in argv[1:]),
+    ]
+    print(
+        f"Host Python cannot import rospy; re-running live MoveIt command inside {container}.",
+        file=sys.stderr,
+    )
+    try:
+        return subprocess.call(cmd)
+    except FileNotFoundError:
+        print(
+            "Docker is unavailable. Run live mode inside ROS Noetic, for example:\n"
+            "./tools/run_in_noetic_container.sh python3 "
+            "piper-on-bunker/scripts/run_moveit_aruco_touch.py --config "
+            "piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml --live --check-only",
+            file=sys.stderr,
+        )
+        return 2
+
+
 def _mock_taught_poses() -> dict[str, TaughtPose]:
     return {
         "home": TaughtPose("home", list(EXPECTED_JOINT_NAMES), [0.0, -0.05, -0.08, 0.0, 0.05, 0.0], "mock"),
@@ -32,6 +79,10 @@ def _mock_taught_poses() -> dict[str, TaughtPose]:
 
 
 def main() -> int:
+    container_status = _rerun_live_in_noetic_container(sys.argv)
+    if container_status is not None:
+        return container_status
+
     parser = argparse.ArgumentParser(description="Plan a fixed-position PiPER-X MoveIt ArUco touch MVP mission.")
     parser.add_argument("--config", default="piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml")
     parser.add_argument("--planning-only", action="store_true", default=True)
@@ -42,7 +93,9 @@ def main() -> int:
     parser.add_argument("--live", action="store_true", help="Use the live ROS MoveIt backend. Never silently falls back to mock.")
     parser.add_argument("--sequence", choices=["pre_touch_test", "full_touch"], default="full_touch")
     parser.add_argument("--mock-taught-poses", action="store_true", help="Use deterministic mock taught poses.")
-    parser.add_argument("--mock-marker-visible", action=argparse.BooleanOptionalAction, default=True)
+    marker_visible = parser.add_mutually_exclusive_group()
+    marker_visible.add_argument("--mock-marker-visible", dest="mock_marker_visible", action="store_true", default=True)
+    marker_visible.add_argument("--no-mock-marker-visible", dest="mock_marker_visible", action="store_false")
     parser.add_argument("--mock-marker-id", type=int, default=6)
     parser.add_argument("--audit-log", default="piper-on-bunker/logs/moveit_aruco_touch/mock_mission.jsonl")
     args = parser.parse_args()

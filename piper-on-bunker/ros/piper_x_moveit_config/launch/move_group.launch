@@ -1,0 +1,41 @@
+<launch>
+  <arg name="debug" default="false"/>
+  <arg unless="$(arg debug)" name="launch_prefix" value=""/>
+  <arg if="$(arg debug)" name="launch_prefix" value="gdb --ex run --args"/>
+  <arg name="info" default="$(arg debug)"/>
+  <arg unless="$(arg info)" name="command_args" value=""/>
+  <arg if="$(arg info)" name="command_args" value="--debug"/>
+  <arg name="pipeline" default="ompl"/>
+  <arg name="allow_trajectory_execution" default="true"/>
+  <arg name="fake_execution_type" default="interpolate"/>
+  <arg name="publish_monitored_planning_scene" default="true"/>
+
+  <group ns="move_group/planning_pipelines">
+    <include file="$(find piper_with_gripper_moveit)/launch/planning_pipeline.launch.xml">
+      <arg name="pipeline" value="ompl"/>
+    </include>
+    <include file="$(find piper_with_gripper_moveit)/launch/planning_pipeline.launch.xml">
+      <arg name="pipeline" value="pilz_industrial_motion_planner"/>
+    </include>
+  </group>
+
+  <group ns="move_group" if="$(arg allow_trajectory_execution)">
+    <param name="moveit_manage_controllers" value="true"/>
+    <param name="moveit_controller_manager" value="moveit_fake_controller_manager/MoveItFakeControllerManager"/>
+    <param name="trajectory_execution/allowed_execution_duration_scaling" value="1.2"/>
+    <param name="trajectory_execution/allowed_goal_duration_margin" value="0.5"/>
+    <param name="trajectory_execution/allowed_start_tolerance" value="0.01"/>
+    <rosparam file="$(find piper_x_moveit_config)/config/fake_controllers.yaml" subst_value="true"/>
+  </group>
+
+  <node name="move_group" launch-prefix="$(arg launch_prefix)" pkg="moveit_ros_move_group" type="move_group" respawn="false" output="screen" args="$(arg command_args)">
+    <env name="DISPLAY" value="$(optenv DISPLAY :0)"/>
+    <param name="allow_trajectory_execution" value="$(arg allow_trajectory_execution)"/>
+    <param name="default_planning_pipeline" value="$(arg pipeline)"/>
+    <param name="monitor_dynamics" value="false"/>
+    <param name="planning_scene_monitor/publish_planning_scene" value="$(arg publish_monitored_planning_scene)"/>
+    <param name="planning_scene_monitor/publish_geometry_updates" value="$(arg publish_monitored_planning_scene)"/>
+    <param name="planning_scene_monitor/publish_state_updates" value="$(arg publish_monitored_planning_scene)"/>
+    <param name="planning_scene_monitor/publish_transforms_updates" value="$(arg publish_monitored_planning_scene)"/>
+  </node>
+</launch>

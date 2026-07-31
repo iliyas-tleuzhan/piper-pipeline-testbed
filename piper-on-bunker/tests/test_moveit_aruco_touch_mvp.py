@@ -161,7 +161,7 @@ def test_wrong_dictionary_blocks_touch():
 
 
 def test_emergency_stop_called_on_execution_failure():
-    cfg = replace(_config(), physical_execution_enabled_by_default=True)
+    cfg = replace(_config(), physical_execution_enabled_by_default=True, piper_x_model_verified=True)
     backend = MockMoveItTouchBackend(execute_ok=False)
     controller = MoveItArucoTouchController(cfg, backend, taught_poses=_poses())
     result = controller.run(planning_only=False, execute=True, confirm="FIXED_ARUCO_TOUCH")

@@ -312,7 +312,7 @@ class MockMoveItTouchBackend:
             "backend": "mock_moveit",
             "robot_model": "agilex_piper_x_unverified",
             "planning_group": "arm",
-            "end_effector_link": "gripper_tcp",
+            "end_effector_link": "gripper_base",
             "robot_urdf": "mock",
         }
 
@@ -561,9 +561,11 @@ class MoveItArucoTouchController:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, f"physical execution requires --confirm {expected_confirm}", planning_only, False)
             if not self.config.physical_execution_enabled_by_default:
                 return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "physical execution disabled in committed config", planning_only, False)
+            if not self.config.piper_x_model_verified:
+                return self._fail("IDLE", TouchFailure.EXECUTION_BLOCKED, "PiPER-X model/FK is not verified; physical execution remains blocked", planning_only, False)
 
         try:
-            self._preflight()
+            self._preflight(require_taught_poses=True)
             marker = self._check_marker()
             plans: list[PlanSummary] = []
             home = self._pose(self.config.home_pose_name)
@@ -615,7 +617,7 @@ class MoveItArucoTouchController:
     def check_only(self) -> TouchMissionResult:
         self.logger.start_mission(self.mission_id)
         try:
-            self._preflight()
+            self._preflight(require_taught_poses=False)
             marker = self._check_marker()
             return TouchMissionResult(
                 True,
@@ -628,7 +630,7 @@ class MoveItArucoTouchController:
         except ValueError as exc:
             return self._fail(self.transitions[-1] if self.transitions else "IDLE", str(exc), str(exc), True, False)
 
-    def _preflight(self) -> None:
+    def _preflight(self, *, require_taught_poses: bool = True) -> None:
         self._transition("IDLE", {"backend": self.backend.describe()})
         ready = self.backend.check_ready()
         if not ready.get("ready"):
@@ -645,9 +647,10 @@ class MoveItArucoTouchController:
             raise ValueError("configured marker size must be 0.100 m")
         if self.config.velocity_scaling > 0.05 or self.config.acceleration_scaling > 0.05:
             raise ValueError("velocity and acceleration scaling must remain <= 0.05")
-        for pose_name in [self.config.home_pose_name, self.config.pre_touch_pose_name, self.config.touch_pose_name, self.config.retract_pose_name]:
-            pose = self._pose(pose_name)
-            validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits)
+        if require_taught_poses:
+            for pose_name in [self.config.home_pose_name, self.config.pre_touch_pose_name, self.config.touch_pose_name, self.config.retract_pose_name]:
+                pose = self._pose(pose_name)
+                validate_joint_values(pose.joint_names, pose.positions, self.config.joint_limits)
 
     def _validate_before_movement(self, pose: TaughtPose) -> None:
         state = self.backend.read_joint_state()

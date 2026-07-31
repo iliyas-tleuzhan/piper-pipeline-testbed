@@ -81,10 +81,10 @@ def main() -> int:
         updated = decoder.update_from_can(int(message.arbitration_id), bytes(message.data), timestamp)
         if not updated:
             return None
-        sample = decoder.sample(now_s=time.time())
         now_s = time.time()
         if not force_publish and publish_period_s > 0.0 and (now_s - last_publish_s) < publish_period_s:
-            return sample.to_status_dict()
+            return None
+        sample = decoder.sample(now_s=now_s)
         msg = JointState()
         msg.header.stamp = rospy.Time.from_sec(sample.stamp_s)
         msg.name = list(PIPER_X_JOINT_NAMES)

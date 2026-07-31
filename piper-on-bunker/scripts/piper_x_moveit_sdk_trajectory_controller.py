@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 
 from _bootstrap import add_repo_src_to_syspath
@@ -11,46 +12,66 @@ add_repo_src_to_syspath()
 from piper_on_bunker.hardware.piper_x_trajectory_control import PIPER_X_TRAJECTORY_JOINTS
 from piper_on_bunker.hardware.piper_x_trajectory_control import PiperXTrajectoryPoint
 from piper_on_bunker.hardware.piper_x_trajectory_control import maximum_endpoint_error
-from piper_on_bunker.hardware.piper_x_trajectory_control import joints_rad_to_raw_mdeg
 from piper_on_bunker.hardware.piper_x_trajectory_control import resample_trajectory
 from piper_on_bunker.hardware.piper_x_trajectory_control import validate_trajectory_joint_names
 from piper_on_bunker.hardware.piper_x_trajectory_control import validate_trajectory_points
 
 
-PIPER_SDK_COMMAND_PRIMITIVE = "C_PiperInterface_V2.JointCtrl"
+PYAGXARM_REPO = "https://github.com/agilexrobotics/pyAgxArm"
+PYAGXARM_COMMIT = "cc498c00af0bcb9e297943e94f4792c0e3ee5b2c"
+PYAGXARM_ARM_MODEL = "PIPER_X"
+PYAGXARM_FIRMWARE_PROFILE = "V189"
+PYAGXARM_MOTION_MODE = "js"
+PYAGXARM_COMMAND_PRIMITIVE = "AgxArm.move_js"
 
 
-class PiperSdkJointCtrlAdapter:
-    def __init__(self, can_name: str) -> None:
-        import piper_sdk
+class PyAgxArmPiperXJointSpaceAdapter:
+    def __init__(self, can_name: str, *, bitrate: int = 1_000_000) -> None:
+        try:
+            from pyAgxArm import AgxArmFactory, ArmModel, PiperFW, create_agx_arm_config
+            import pyAgxArm
+        except Exception as exc:
+            raise ImportError(
+                "pyAgxArm import failed; run tools/install_piper_x_feedback_dependency.sh "
+                f"for commit {PYAGXARM_COMMIT}: {exc!r}"
+            ) from exc
 
-        interface_cls = getattr(piper_sdk, "C_PiperInterface_V2", None)
-        if interface_cls is None:
-            interface_cls = getattr(piper_sdk, "C_PiperInterface")
-        self._piper = interface_cls(can_name)
+        self.module_path = str(getattr(pyAgxArm, "__file__", "unknown"))
+        self.config = create_agx_arm_config(
+            robot=ArmModel.PIPER_X,
+            comm="can",
+            firmeware_version=PiperFW.V189,
+            interface="socketcan",
+            channel=can_name,
+            bitrate=int(bitrate),
+        )
+        self._arm = AgxArmFactory.create_arm(self.config)
+        self.connected = False
+        self.configured = False
 
     def connect(self) -> None:
-        self._piper.ConnectPort()
+        self._arm.connect()
+        self.connected = True
 
-    def enable_all(self) -> None:
-        if hasattr(self._piper, "EnableArm"):
-            self._piper.EnableArm(7)
-        elif hasattr(self._piper, "EnableArmStandbyMode"):
-            self._piper.EnableArmStandbyMode(7)
-        else:
-            raise AttributeError("piper_sdk does not expose an arm enable method")
+    def configure_joint_space_stream(self, *, speed_percent: int) -> None:
+        percent = int(speed_percent)
+        if percent < 0 or percent > 100:
+            raise ValueError("speed percent must be in [0, 100]")
+        self._arm.set_follower_mode()
+        self._arm.set_speed_percent(percent)
+        self._arm.set_motion_mode(PYAGXARM_MOTION_MODE)
+        enabled = self._arm.enable(255)
+        if enabled is False:
+            raise RuntimeError("pyAgxArm enable(255) returned False")
+        self.configured = True
 
-    def configure_motion(self, *, speed_percent: int, high_follow: bool) -> None:
-        follow_mode = 0xAD if high_follow else 0x00
-        if hasattr(self._piper, "MotionCtrl_2"):
-            self._piper.MotionCtrl_2(0x01, 0x01, int(speed_percent), follow_mode)
-        else:
-            self._piper.ModeCtrl(0x01, 0x01, int(speed_percent), follow_mode)
-
-    def write_joints_raw(self, joints_raw: list[int]) -> None:
-        if len(joints_raw) != 6:
-            raise ValueError("JointCtrl requires exactly six joints")
-        self._piper.JointCtrl(*[int(value) for value in joints_raw])
+    def write_joints_rad(self, joints_rad: list[float]) -> None:
+        values = [float(value) for value in joints_rad]
+        if len(values) != 6:
+            raise ValueError("move_js requires exactly six joints")
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("move_js target contains non-finite joints")
+        self._arm.move_js(values)
 
 
 class PiperXMoveItSdkTrajectoryController:
@@ -73,10 +94,16 @@ class PiperXMoveItSdkTrajectoryController:
             auto_start=False,
         )
         self.server.start()
-        rospy.set_param("~controller_type", "piper_x_sdk_jointctrl_follow_joint_trajectory")
+        rospy.set_param("~controller_type", "piper_x_pyagxarm_follow_joint_trajectory")
+        rospy.set_param("~backend", "pyagxarm_piper_x")
         rospy.set_param("~can_interface", args.can)
         rospy.set_param("~feedback_topic", args.feedback_topic)
-        rospy.set_param("~sdk_command_primitive", PIPER_SDK_COMMAND_PRIMITIVE)
+        rospy.set_param("~arm_model", PYAGXARM_ARM_MODEL)
+        rospy.set_param("~firmware_profile", PYAGXARM_FIRMWARE_PROFILE)
+        rospy.set_param("~motion_mode", PYAGXARM_MOTION_MODE)
+        rospy.set_param("~command_primitive", PYAGXARM_COMMAND_PRIMITIVE)
+        rospy.set_param("~dependency_repo", PYAGXARM_REPO)
+        rospy.set_param("~dependency_commit", PYAGXARM_COMMIT)
         rospy.set_param("~connects_on_first_goal", True)
         rospy.set_param("~motion_commanded_at_startup", False)
         rospy.set_param("~speed_percent", int(args.speed_percent))
@@ -84,7 +111,7 @@ class PiperXMoveItSdkTrajectoryController:
         rospy.set_param("~endpoint_tolerance_rad", float(args.endpoint_tolerance_rad))
         rospy.set_param("~settle_timeout_s", float(args.settle_timeout_s))
         rospy.loginfo(
-            "PiPER-X MoveIt SDK trajectory controller ready on %s; hardware connects only on first accepted goal",
+            "PiPER-X pyAgxArm MoveIt trajectory controller ready on %s; hardware connects only on first accepted goal",
             args.action_name,
         )
 
@@ -100,18 +127,23 @@ class PiperXMoveItSdkTrajectoryController:
             raise RuntimeError(f"missing live feedback joints on {self.args.feedback_topic}")
         return [self.latest_positions[name] for name in PIPER_X_TRAJECTORY_JOINTS]
 
-    def _current_raw(self) -> list[int]:
-        return joints_rad_to_raw_mdeg(self._current_positions())
-
     def _connect_for_goal(self):
         if self.arm is not None:
             return self.arm
-        arm = PiperSdkJointCtrlAdapter(self.args.can)
-        arm.connect()
-        initial_joints = self._current_raw()
-        arm.enable_all()
-        arm.configure_motion(speed_percent=int(self.args.speed_percent), high_follow=bool(self.args.high_follow))
-        arm.write_joints_raw(initial_joints)
+        arm = PyAgxArmPiperXJointSpaceAdapter(self.args.can)
+        try:
+            arm.connect()
+        except Exception as exc:
+            raise RuntimeError(f"pyAgxArm connection failure: {exc!r}") from exc
+        initial_joints = self._current_positions()
+        try:
+            arm.configure_joint_space_stream(speed_percent=int(self.args.speed_percent))
+        except Exception as exc:
+            raise RuntimeError(f"pyAgxArm follower/js/enable initialization failure: {exc!r}") from exc
+        try:
+            arm.write_joints_rad(initial_joints)
+        except Exception as exc:
+            raise RuntimeError(f"pyAgxArm initial current-pose command failure: {exc!r}") from exc
         self.arm = arm
         return arm
 
@@ -196,8 +228,13 @@ class PiperXMoveItSdkTrajectoryController:
                 if remaining <= 0.0:
                     break
                 time.sleep(min(0.002, remaining))
-            raw = joints_rad_to_raw_mdeg(command.positions_rad)
-            arm.write_joints_raw(raw)
+            try:
+                arm.write_joints_rad(command.positions_rad)
+            except Exception as exc:
+                result.error_code = FollowJointTrajectoryResult.PATH_TOLERANCE_VIOLATED
+                result.error_string = f"pyAgxArm move_js failed at command {index + 1}/{len(commands)}: {exc!r}"
+                self.server.set_aborted(result, result.error_string)
+                return
             self._publish_feedback(command.positions_rad)
             now = time.monotonic()
             if now >= next_progress_log:
@@ -218,7 +255,13 @@ class PiperXMoveItSdkTrajectoryController:
                 self._hold_current_feedback(arm)
                 self.server.set_preempted(text="PiPER-X trajectory preempted during endpoint settle; held current feedback")
                 return
-            arm.write_joints_raw(joints_rad_to_raw_mdeg(final_positions))
+            try:
+                arm.write_joints_rad(final_positions)
+            except Exception as exc:
+                result.error_code = FollowJointTrajectoryResult.PATH_TOLERANCE_VIOLATED
+                result.error_string = f"pyAgxArm final hold move_js failed: {exc!r}"
+                self.server.set_aborted(result, result.error_string)
+                return
             self._publish_feedback(final_positions)
             error = self._endpoint_error(final_positions)
             if error <= float(self.args.endpoint_tolerance_rad):
@@ -234,13 +277,13 @@ class PiperXMoveItSdkTrajectoryController:
 
     def _hold_current_feedback(self, arm) -> None:
         try:
-            arm.write_joints_raw(self._current_raw())
+            arm.write_joints_rad(self._current_positions())
         except Exception as exc:
             self.rospy.logwarn("Failed to hold current PiPER-X feedback on stop: %s", exc)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="PiPER-X MoveIt FollowJointTrajectory action server using piper_sdk JointCtrl.")
+    parser = argparse.ArgumentParser(description="PiPER-X MoveIt FollowJointTrajectory action server using pyAgxArm move_js.")
     parser.add_argument("--action-name", default="arm_controllers/follow_joint_trajectory")
     parser.add_argument("--feedback-topic", default="/joint_states")
     parser.add_argument("--can", default="can0")
@@ -249,7 +292,6 @@ def main() -> int:
     parser.add_argument("--endpoint-tolerance-rad", type=float, default=0.03)
     parser.add_argument("--settle-timeout-s", type=float, default=3.0)
     parser.add_argument("--first-point-blend-s", type=float, default=0.25)
-    parser.add_argument("--high-follow", action="store_true", default=True)
     args = parser.parse_args()
 
     import rospy

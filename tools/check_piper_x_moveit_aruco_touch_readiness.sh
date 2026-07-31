@@ -124,13 +124,19 @@ rosparam get /move_group/controller_list 2>/dev/null || echo unavailable
 for t in /arm_controllers/follow_joint_trajectory/goal /arm_controllers/follow_joint_trajectory/result /arm_controllers/follow_joint_trajectory/status /arm_controllers/follow_joint_trajectory/cancel; do
   rostopic info "$t" >/dev/null 2>&1 && echo "$t: ok" || echo "$t: not_ready"
 done
-echo "piper_x_sdk_trajectory_controller:"
+echo "piper_x_pyagxarm_trajectory_controller:"
 if rosnode list 2>/dev/null | grep -qx /piper_x_moveit_sdk_trajectory_controller; then
   echo "node: ok"
   echo "controller_type: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/controller_type 2>/dev/null || echo unavailable)"
+  echo "backend: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/backend 2>/dev/null || echo unavailable)"
   echo "feedback_topic: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/feedback_topic 2>/dev/null || echo unavailable)"
   echo "can_interface: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/can_interface 2>/dev/null || echo unavailable)"
-  echo "sdk_command_primitive: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/sdk_command_primitive 2>/dev/null || echo unavailable)"
+  echo "arm_model: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/arm_model 2>/dev/null || echo unavailable)"
+  echo "firmware_profile: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/firmware_profile 2>/dev/null || echo unavailable)"
+  echo "motion_mode: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/motion_mode 2>/dev/null || echo unavailable)"
+  echo "command_primitive: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/command_primitive 2>/dev/null || echo unavailable)"
+  echo "dependency_repo: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/dependency_repo 2>/dev/null || echo unavailable)"
+  echo "dependency_commit: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/dependency_commit 2>/dev/null || echo unavailable)"
   echo "connects_on_first_goal: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/connects_on_first_goal 2>/dev/null || echo unavailable)"
   echo "motion_commanded_at_startup: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/motion_commanded_at_startup 2>/dev/null || echo unavailable)"
   echo "speed_percent: $(rosparam get /piper_x_moveit_sdk_trajectory_controller/speed_percent 2>/dev/null || echo unavailable)"

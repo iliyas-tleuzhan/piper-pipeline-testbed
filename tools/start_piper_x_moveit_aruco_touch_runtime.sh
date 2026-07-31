@@ -12,6 +12,7 @@ STAGED_ROS_PKGS=${STAGED_ROS_PKGS:-/tmp/piper_x_moveit_ros}
 PIPER_X_JOINT3_UPPER_OVERRIDE_RAD=${PIPER_X_JOINT3_UPPER_OVERRIDE_RAD:-0.02}
 PIPER_X_MOVEIT_SPEED_PERCENT=${PIPER_X_MOVEIT_SPEED_PERCENT:-30}
 PIPER_X_MOVEIT_COMMAND_RATE_HZ=${PIPER_X_MOVEIT_COMMAND_RATE_HZ:-50}
+PYAGXARM_COMMIT=${PYAGXARM_COMMIT:-cc498c00af0bcb9e297943e94f4792c0e3ee5b2c}
 
 cd "$(dirname "$0")/.."
 
@@ -60,6 +61,16 @@ PY
 sha256sum '$STAGED_ROS_PKGS/agx_arm_description/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro'"
 
 docker exec -i "$CONTAINER" bash -lc 'ip link set can0 down >/dev/null 2>&1 || true; ip link set can0 type can bitrate 1000000 >/dev/null 2>&1 || true; ip link set can0 txqueuelen 1000 >/dev/null 2>&1 || true; ip link set can0 up >/dev/null 2>&1 || true'
+
+if ! docker exec -i "$CONTAINER" bash -lc "python3 - <<'PY' >/dev/null 2>&1
+import pyAgxArm
+from pyAgxArm import ArmModel, PiperFW
+assert ArmModel.PIPER_X == 'piper_x'
+assert PiperFW.V189 == 'v189'
+PY"; then
+  echo "pyAgxArm is not installed in $CONTAINER; run ./tools/install_piper_x_feedback_dependency.sh first." >&2
+  exit 2
+fi
 
 docker exec -i "$CONTAINER" bash -lc '
 source /opt/ros/noetic/setup.bash >/dev/null 2>&1 || true
@@ -152,7 +163,8 @@ echo "MoveIt model: PiPER-X staged from $AGX_ARM_URDF_HOST/piper_x"
 echo "MoveIt bounds override: joint3 upper -> $PIPER_X_JOINT3_UPPER_OVERRIDE_RAD rad in staged URDF only"
 echo "PiPER-X FK/model verification: false; taught-joint execution does not use FK/hand-eye targeting"
 echo "MoveIt joint-state authority: /piper_x/joint_states -> /joint_states"
-echo "MoveIt trajectory controller: /arm_controllers/follow_joint_trajectory -> piper_sdk JointCtrl on first execution goal"
+echo "MoveIt trajectory controller: /arm_controllers/follow_joint_trajectory -> pyAgxArm PIPER_X V189 move_js on first execution goal"
+echo "pyAgxArm required commit: $PYAGXARM_COMMIT"
 echo "MoveIt SDK speed percent: $PIPER_X_MOVEIT_SPEED_PERCENT"
 echo "MoveIt command streaming rate: $PIPER_X_MOVEIT_COMMAND_RATE_HZ Hz"
 echo "Marker contract: $MARKER_DICTIONARY ID $MARKER_ID size $MARKER_SIZE_M m"

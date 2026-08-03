@@ -1,4 +1,4 @@
-schema_version: piper_x.phase_0a_repeatability_config.v1
+schema_version: piper_x.phase_0a_repeatability_config.v2
 
 identity:
   arm_id: unknown
@@ -7,7 +7,7 @@ identity:
   can_interface: can0
   physical_mounting_id: unknown
   side: unknown
-  camera_serial: "243322074578"
+  camera_serial: unknown
   camera_mount_id: unknown
   tool_id: unknown
   tool_description: unknown
@@ -22,8 +22,8 @@ runtime:
   max_abs_velocity_rad_s: 0.01
 
 robot_model:
-  urdf_path: /home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro
-  urdf_sha256: 0ee3f52f9acf3060a7f3e439c6e5e46b6a53d4fa509dd495045548be6b7f90cd
+  urdf_path: unknown
+  urdf_sha256: unknown
   planning_group: arm
   planning_frame: world
   end_effector_link: gripper_base
@@ -36,19 +36,22 @@ execution:
   endpoint_tolerance_rad: 0.03
   settle_timeout_s: 3.0
   physical_execution_enabled_by_default: false
+  stop_command:
+    - tools/stop_piper_x_moveit_motion.sh
 
 repeatability:
   diagnostic_id_prefix: piper_x_phase_0a
   output_root: piper-on-bunker/data/local/calibration/phase_0a
   taught_pose_manifest: piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml
   moveit_touch_config: piper-on-bunker/config/piper_x_moveit_touch_aruco_fixed.yaml
-  staging_pose_name: staging
-  allowed_pose_names:
-    - staging
+  measurement_pose_name: staging
+  allowed_departure_pose_names:
+    - repeatability_departure
+  default_departure_pose_name: repeatability_departure
   observation_sample_rate_hz: 20.0
   observation_duration_s: 10.0
   require_base_stopped_ack: true
-  allow_no_physical_measurement: true
+  checklist_path: ""
   lock_path: /tmp/piper_x_phase_0a_repeatability.lock
   rejected_handeye_path: handeye_failure_diagnostics/rejected_piper_x_d435i_handeye_20260730.yaml
   thresholds:
@@ -60,3 +63,4 @@ repeatability:
     maximum_stale_feedback_events: 0
     physical_repeatability_target_mm: 10.0
     maximum_pairwise_physical_spread_mm: 20.0
+    maximum_measurement_uncertainty_mm: 5.0

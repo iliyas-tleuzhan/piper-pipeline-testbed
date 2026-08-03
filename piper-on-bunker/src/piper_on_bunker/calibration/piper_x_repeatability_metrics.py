@@ -105,9 +105,10 @@ def endpoint_settling_metrics(cycles: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def physical_repeatability_metrics(measurements: list[dict[str, Any]]) -> dict[str, Any]:
+def physical_repeatability_metrics(measurements: list[dict[str, Any]], *, maximum_measurement_uncertainty_mm: float = 5.0) -> dict[str, Any]:
     points = []
     uncertainties = []
+    methods = set()
     for item in measurements:
         if not item:
             continue
@@ -115,30 +116,41 @@ def physical_repeatability_metrics(measurements: list[dict[str, Any]]) -> dict[s
             continue
         point = [float(item["x_mm"]), float(item["y_mm"]), float(item["z_mm"])]
         _finite(point)
+        uncertainty = item.get("estimated_measurement_uncertainty_mm")
+        if uncertainty is None:
+            raise ValueError("measurement uncertainty is required when XYZ is provided")
+        uncertainty = float(uncertainty)
+        if not math.isfinite(uncertainty) or uncertainty <= 0.0:
+            raise ValueError("measurement uncertainty must be positive and finite")
         points.append(point)
-        if item.get("estimated_measurement_uncertainty_mm") is not None:
-            uncertainties.append(float(item["estimated_measurement_uncertainty_mm"]))
+        uncertainties.append(uncertainty)
+        if item.get("method"):
+            methods.add(str(item["method"]))
     if not points:
-        return {"available": False, "sample_count": 0, "classification_basis": "physical endpoint repeatability unknown"}
+        return {"available": False, "sample_count": 0, "status": "UNKNOWN", "classification_basis": "physical endpoint repeatability unknown"}
     centroid = [mean([p[axis] for p in points]) for axis in range(3)]
-    distances = [
-        math.sqrt(sum((p[axis] - centroid[axis]) ** 2 for axis in range(3)))
-        for p in points
-    ]
-    pairwise = [
-        math.sqrt(sum((a[axis] - b[axis]) ** 2 for axis in range(3)))
-        for a, b in combinations(points, 2)
-    ]
+    distances = [math.sqrt(sum((p[axis] - centroid[axis]) ** 2 for axis in range(3))) for p in points]
+    pairwise = [math.sqrt(sum((a[axis] - b[axis]) ** 2 for axis in range(3))) for a, b in combinations(points, 2)]
+    uncertainty_summary = scalar_summary(uncertainties)
+    max_uncertainty = max(uncertainties, default=0.0)
+    max_pairwise = max(pairwise, default=0.0)
+    rms_distance = rms(distances)
+    uncertainty_too_large = max_uncertainty > float(maximum_measurement_uncertainty_mm)
+    spread_comparable_to_uncertainty = max_pairwise <= max_uncertainty * 2.0
     return {
         "available": True,
         "sample_count": len(points),
+        "methods": sorted(methods),
         "x_mm": scalar_summary([p[0] for p in points]),
         "y_mm": scalar_summary([p[1] for p in points]),
         "z_mm": scalar_summary([p[2] for p in points]),
         "centroid_mm": centroid,
         "distance_from_centroid_mm": distances,
-        "rms_distance_from_centroid_mm": rms(distances),
+        "rms_distance_from_centroid_mm": rms_distance,
         "maximum_distance_from_centroid_mm": max(distances, default=0.0),
-        "maximum_pairwise_distance_mm": max(pairwise, default=0.0),
-        "measurement_uncertainty_mm": scalar_summary(uncertainties),
+        "maximum_pairwise_distance_mm": max_pairwise,
+        "measurement_uncertainty_mm": uncertainty_summary,
+        "maximum_measurement_uncertainty_mm": max_uncertainty,
+        "uncertainty_too_large_for_strong_acceptance": uncertainty_too_large,
+        "spread_comparable_to_or_smaller_than_uncertainty": spread_comparable_to_uncertainty,
     }

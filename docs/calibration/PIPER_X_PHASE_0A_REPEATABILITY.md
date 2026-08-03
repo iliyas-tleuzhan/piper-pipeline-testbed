@@ -144,32 +144,56 @@ cd /home/dase-hw101/piper-pipeline-testbed
   --duration-s 10
 ```
 
-Planning-only repeatability:
-
-```bash
-cd /home/dase-hw101/piper-pipeline-testbed
-./tools/run_piper_x_phase_0a_repeatability.sh \
-  --config piper-on-bunker/config/piper_x_phase_0a_repeatability.yaml \
-  --mode repeat_pose \
-  --pose staging \
-  --cycles 3
-```
-
-Future physical repeatability command:
+Planning-only repeated-return check:
 
 ```bash
 cd /home/dase-hw101/piper-pipeline-testbed
 ./tools/run_piper_x_phase_0a_repeatability.sh \
   --config piper-on-bunker/config/piper_x_phase_0a_repeatability.local.yaml \
   --mode repeat_pose \
-  --pose staging \
-  --cycles 3 \
-  --execute \
-  --confirm RUN_PHASE_0A_REPEATABILITY
+  --measurement-pose staging \
+  --departure-pose repeatability_departure \
+  --cycles 3
 ```
 
-The committed config keeps physical execution disabled. A local ignored config
-must be reviewed before any physical run.
+A meaningful repeated-return test must not use `staging` as both the
+measurement pose and departure pose. The old staging-only command from the first
+Phase 0A scaffold produces no-op cycles and is not sufficient.
+
+Future physical repeated-return command:
+
+```bash
+cd /home/dase-hw101/piper-pipeline-testbed
+./tools/run_piper_x_phase_0a_repeatability.sh \
+  --config piper-on-bunker/config/piper_x_phase_0a_repeatability.local.yaml \
+  --mode repeat_pose \
+  --measurement-pose staging \
+  --departure-pose repeatability_departure \
+  --cycles 3 \
+  --execute \
+  --confirm RUN_PHASE_0A_REPEATABILITY \
+  --confirm-base-stopped BUNKER_STOPPED \
+  --checklist piper-on-bunker/data/local/calibration/phase_0a/operator_checklist.yaml
+```
+
+Finalize after the operator fills `physical_measurements.csv`:
+
+```bash
+cd /home/dase-hw101/piper-pipeline-testbed
+./tools/run_piper_x_phase_0a_repeatability.sh \
+  --config piper-on-bunker/config/piper_x_phase_0a_repeatability.local.yaml \
+  --mode finalize \
+  --artifact-dir piper-on-bunker/data/local/calibration/phase_0a/<diagnostic_id>
+```
+
+Finalize mode performs no robot command. It reloads `manifest.yaml`,
+`cycles.jsonl`, and `physical_measurements.csv`, recomputes physical
+repeatability, updates the report, and still does not approve joint zero, FK,
+TCP, or hand-eye calibration.
+
+The committed config keeps physical execution disabled and contains only
+placeholder hardware identities. A local ignored config must provide the actual
+arm, mount, camera, tool, checklist path, measurement pose and departure pose.
 
 ## Initial Arm Position
 
@@ -186,23 +210,42 @@ the arm starts at zero.
 
 ## Approved Poses
 
-Phase 0A refuses arbitrary joint arrays. It only accepts taught poses listed in
-the config allowlist:
+Phase 0A refuses arbitrary joint arrays. It explicitly separates:
 
 ```yaml
 repeatability:
-  allowed_pose_names:
-    - staging
+  measurement_pose_name: staging
+  allowed_departure_pose_names:
+    - repeatability_departure
+  default_departure_pose_name: repeatability_departure
 ```
 
-Add another pose only after the operator confirms it is non-contact, reachable,
-not near limits, not near a singularity based on planning diagnostics, and
-physically measurable from a fixed reference.
+The cycle is:
+
+```text
+actual current state
+-> measurement pose / staging
+-> approved departure pose
+-> measurement pose / staging
+-> record joint feedback and physical measurement
+-> repeat
+```
+
+Do not invent a departure pose in the committed config. Add it only in a local
+ignored config after documenting that it was physically taught, non-contact,
+clear of the marker, wall, Bunker, inactive arm, LiDAR and operator, not near a
+joint limit, and that its path from staging plans successfully without using the
+rejected hand-eye calibration.
 
 ## Mechanical Checklist
 
-Every artifact directory contains `operator_checklist.md`. It must remain
-incomplete until an operator checks:
+Every artifact directory contains `operator_checklist.md` and a machine-readable
+`operator_checklist.yaml`. Physical execution requires every blocking YAML item
+to be checked by an operator with timestamp and matching arm/mount/camera/tool
+identity. Planning-only and observation-only may run with an incomplete
+checklist.
+
+The checklist covers:
 
 - Bunker stationary;
 - PiPER-X base bolts tight;
@@ -235,9 +278,13 @@ x_mm, y_mm, z_mm, estimated_measurement_uncertainty_mm, notes
 Acceptable measurement methods include manual XYZ from a fixed Bunker reference,
 pointer-to-grid, fixed calibration board coordinates, ruler, or dial indicator.
 
-When no physical measurement is supplied, the classification may pass only as
-`JOINT_REPEATABLE_PHYSICAL_REPEATABILITY_UNKNOWN`, not as physical repeatability
-acceptable.
+When no physical measurement is supplied, the classification is
+`JOINT_REPEATABLE_PHYSICAL_REPEATABILITY_UNKNOWN`. This is a software/controller
+repeatability result only; it is not a complete Phase 0A physical pass.
+
+Measurement rows must have positive finite uncertainty. If the uncertainty is
+too large, the report cannot strongly accept physical repeatability even if the
+spread appears small.
 
 ## Artifact Structure
 
@@ -250,6 +297,7 @@ piper-on-bunker/data/local/calibration/phase_0a/<diagnostic_id>/
   joint_summary.json
   physical_measurements.csv
   operator_checklist.md
+  operator_checklist.yaml
   final_report.md
 ```
 
@@ -307,6 +355,19 @@ Possible classifications:
 - `MODEL_OR_CALIBRATION_INVESTIGATION_REQUIRED`;
 - `TEST_ABORTED`.
 
+The manifest also separates:
+
+```yaml
+phase_0a:
+  observation_passed: true|false
+  joint_repeatability_passed: true|false
+  controller_settling_passed: true|false
+  physical_repeatability:
+    status: ACCEPTABLE | SUSPECT | UNKNOWN
+  mechanical_checklist_passed: true|false
+  ready_for_joint_zero_fk_investigation: true|false
+```
+
 The diagnostic is deliberately conservative:
 
 - stale or incomplete joint feedback -> `FEEDBACK_UNSTABLE`;
@@ -317,8 +378,10 @@ The diagnostic is deliberately conservative:
   `JOINT_REPEATABLE_PHYSICAL_REPEATABILITY_UNKNOWN`;
 - joints and physical endpoint repeat -> `JOINT_AND_PHYSICAL_REPEATABILITY_ACCEPTABLE`.
 
-Phase 0A pass only means the system is repeatable enough to proceed to Phase 0B
-joint-zero verification and Phase 0C FK validation. It does not mark the arm
+A complete Phase 0A physical pass requires acceptable joint/controller
+repeatability and acceptable physical endpoint repeatability. A software-only
+result with physical repeatability `UNKNOWN` may guide continued diagnostics,
+but it is not a complete physical repeatability pass and does not mark the arm
 calibrated.
 
 ## Stop And Failure Handling
@@ -346,9 +409,12 @@ Proceed to Phase 0B/0C only when:
 - at least the configured minimum cycles completed;
 - endpoint tolerance is reached consistently;
 - no stale feedback or controller aborts occurred;
-- physical endpoint repeatability is acceptable, or it is explicitly unknown
-  and a measurement method has been scheduled;
+- physical endpoint repeatability is `ACCEPTABLE` after finalize;
 - mechanical checklist has no blocking issues.
+
+If physical endpoint repeatability is `UNKNOWN`, continue diagnostics and
+complete the measurement/finalize workflow before treating Phase 0A as a
+physical pass.
 
 Stop and repair mechanics/controller first when:
 
@@ -371,3 +437,30 @@ Phase 0A must not:
 - write `fk_validated: true`;
 - write `handeye_verified: true`;
 - write `calibrated_touch_validated: true`.
+
+## Corrected Workflow
+
+1. Perform mechanical inspection.
+2. Create a reviewed local config `piper_x_phase_0a_repeatability.local.yaml`
+   with real arm, mount, camera, tool, measurement pose and departure pose.
+3. Start the existing PiPER-X MoveIt runtime.
+4. Run readiness.
+5. Run observation-only.
+6. Run planning-only departure/return cycles.
+7. Prepare the fixed physical measurement reference.
+8. Complete `operator_checklist.yaml` manually.
+9. Run future physical repeated-return execution only with both confirmation
+   tokens.
+10. Fill `physical_measurements.csv`.
+11. Run `--mode finalize`.
+12. Interpret whether the result is software-only, physical-repeatability
+    unknown, physical-repeatability suspect, or acceptable.
+
+Physical execution requires `--confirm RUN_PHASE_0A_REPEATABILITY` and
+`--confirm-base-stopped BUNKER_STOPPED`. The base-stopped acknowledgement is
+operator-provided and is not a sensor proof.
+
+On interruption, timeout, controller abort, malformed trajectory or unexpected
+exception, Phase 0A records whether a backend stop and the external stop command
+were attempted and whether the external stop returned success. It must not
+report `motion_commanded: false` after a physical plan execution was attempted.

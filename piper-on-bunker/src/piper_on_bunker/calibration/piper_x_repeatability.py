@@ -4,13 +4,12 @@ import csv
 import json
 import math
 import os
-import signal
 import socket
 import subprocess
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -70,6 +69,7 @@ class MotionExecutionState:
     external_stop_result: dict[str, Any] | None = None
     return_to_staging_status: str = "not_attempted"
     cancellation_requested: bool = False
+    current_physical_pose_status: str = "unknown"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -84,6 +84,7 @@ class MotionExecutionState:
             "external_stop_result": self.external_stop_result,
             "return_to_staging_status": self.return_to_staging_status,
             "cancellation_requested": self.cancellation_requested,
+            "current_physical_pose_status": self.current_physical_pose_status,
         }
 
 
@@ -296,6 +297,98 @@ def invoke_stop(config: Phase0AConfig, backend: Any | None, motion_state: Motion
     except Exception as exc:
         motion_state.external_stop_result = {"command": list(config.stop_command), "error": repr(exc)}
         motion_state.stop_succeeded = False
+
+
+def endpoint_error_by_joint(snapshot: JointStateSnapshot, target_pose: TaughtPose) -> dict[str, float]:
+    if snapshot.joint_names != list(target_pose.joint_names):
+        raise ValueError(f"joint-state ordering mismatch: expected {target_pose.joint_names}, got {snapshot.joint_names}")
+    if len(snapshot.positions) != len(target_pose.positions):
+        raise ValueError("joint-state position count mismatch")
+    if not all(math.isfinite(float(value)) for value in snapshot.positions):
+        raise ValueError("joint-state contains non-finite position")
+    return {name: float(actual) - float(target) for name, actual, target in zip(snapshot.joint_names, snapshot.positions, target_pose.positions)}
+
+
+def wait_for_endpoint_settling(
+    backend: Any,
+    target_pose: TaughtPose,
+    config: Phase0AConfig,
+    *,
+    now_fn=time.monotonic,
+    sleep_fn=time.sleep,
+    sample_period_s: float = 0.05,
+) -> dict[str, Any]:
+    started = now_fn()
+    deadline = started + float(config.settle_timeout_s)
+    read_count = 0
+    stale_count = 0
+    incomplete_count = 0
+    max_age = 0.0
+    monotonic = True
+    last_stamp: float | None = None
+    last_valid_snapshot: JointStateSnapshot | None = None
+    last_error_by_joint: dict[str, float] | None = None
+    last_max_error: float | None = None
+    endpoint_reached = False
+
+    while True:
+        now = now_fn()
+        if now > deadline:
+            break
+        try:
+            snapshot = backend.read_joint_state()
+            read_count += 1
+        except Exception:
+            incomplete_count += 1
+            sleep_fn(sample_period_s)
+            continue
+        if snapshot.stamp_s is not None:
+            if last_stamp is not None and float(snapshot.stamp_s) < last_stamp:
+                monotonic = False
+            last_stamp = float(snapshot.stamp_s)
+        max_age = max(max_age, float(snapshot.age_s or 0.0))
+        if snapshot.joint_names != list(target_pose.joint_names) or len(snapshot.positions) != len(target_pose.positions):
+            incomplete_count += 1
+            sleep_fn(sample_period_s)
+            continue
+        if float(snapshot.age_s or 0.0) > float(config.max_joint_state_age_s):
+            stale_count += 1
+            sleep_fn(sample_period_s)
+            continue
+        try:
+            errors = endpoint_error_by_joint(snapshot, target_pose)
+        except ValueError:
+            incomplete_count += 1
+            sleep_fn(sample_period_s)
+            continue
+        max_error = max((abs(value) for value in errors.values()), default=float("inf"))
+        last_valid_snapshot = snapshot
+        last_error_by_joint = errors
+        last_max_error = max_error
+        if max_error <= float(config.endpoint_tolerance_rad):
+            endpoint_reached = True
+            break
+        sleep_fn(sample_period_s)
+
+    elapsed = max(0.0, now_fn() - started)
+    return {
+        "endpoint_reached": endpoint_reached,
+        "endpoint_settling_time_s": elapsed,
+        "settling_time_s": elapsed,
+        "timeout": not endpoint_reached,
+        "joint_state_read_count": read_count,
+        "stale_feedback_events": stale_count,
+        "incomplete_feedback_events": incomplete_count,
+        "maximum_observed_feedback_age_s": max_age,
+        "feedback_timestamps_monotonic": monotonic,
+        "maximum_joint_error_rad": last_max_error,
+        "per_joint_signed_error": last_error_by_joint,
+        "per_joint_abs_error": {name: abs(value) for name, value in (last_error_by_joint or {}).items()},
+        "rms_joint_error_rad": (sum(value * value for value in (last_error_by_joint or {}).values()) / len(last_error_by_joint)) ** 0.5 if last_error_by_joint else None,
+        "final_measured_joint_values": list(last_valid_snapshot.positions) if last_valid_snapshot else None,
+        "final_joint_state_age_s": last_valid_snapshot.age_s if last_valid_snapshot else None,
+        "final_joint_state_stamp_s": last_valid_snapshot.stamp_s if last_valid_snapshot else None,
+    }
 
 
 def plan_repeatability_segments(config: Phase0AConfig, *, measurement_pose_name: str, departure_pose_name: str, backend, touch_config, poses: dict[str, TaughtPose], cycles: int) -> list[PlanSummary]:

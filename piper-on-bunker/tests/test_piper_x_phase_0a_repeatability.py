@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -18,6 +20,7 @@ from piper_on_bunker.calibration.piper_x_repeatability import (
     run_observation_mode,
     validate_measurement_departure,
     validate_taught_pose_for_phase0a,
+    wait_for_endpoint_settling,
 )
 from piper_on_bunker.calibration.piper_x_repeatability_artifacts import Phase0AArtifactWriter, checklist_template, validate_checklist
 from piper_on_bunker.calibration.piper_x_repeatability_contract import (
@@ -57,6 +60,58 @@ class StaticReader:
 class PlanningBackend(MockMoveItTouchBackend):
     def __init__(self):
         super().__init__(joint_state=JointStateSnapshot(JOINTS, [0.0] * 6, 0.0))
+
+
+class SequenceBackend(MockMoveItTouchBackend):
+    def __init__(self, snapshots):
+        super().__init__(joint_state=snapshots[0] if snapshots else JointStateSnapshot(JOINTS, [0.0] * 6, 0.0))
+        self.snapshots = list(snapshots)
+        self.reads = 0
+
+    def read_joint_state(self):
+        if self.reads < len(self.snapshots):
+            snapshot = self.snapshots[self.reads]
+        else:
+            snapshot = self.snapshots[-1]
+        self.reads += 1
+        return snapshot
+
+
+def _load_repeatability_script():
+    root = Path(__file__).resolve().parents[2]
+    scripts_dir = root / "piper-on-bunker" / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    module_path = scripts_dir / "run_piper_x_repeatability_diagnostic.py"
+    spec = importlib.util.spec_from_file_location("phase0a_runner_under_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+class ExecutingBackend(PlanningBackend):
+    cancel_on: str | None = None
+    runner = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.stop_called = False
+
+    def execute_plan(self, plan, timeout_s):
+        self.executed.append(plan.name)
+        if self.cancel_on == "after_initial" and plan.name == "initial_to_measurement":
+            self.runner.CANCEL_REQUESTED = True
+        if self.cancel_on == "after_departure" and plan.name == "cycle_1_to_departure":
+            self.runner.CANCEL_REQUESTED = True
+        return True
+
+    def read_joint_state(self):
+        return JointStateSnapshot(JOINTS, [0.0] * 6, 0.0, [0.0] * 6, float(len(self.executed) + self.reads if hasattr(self, "reads") else len(self.executed)), "/piper_x/joint_states")
+
+    def stop(self):
+        self.stop_called = True
+        super().stop()
 
 
 def poses():
@@ -246,3 +301,205 @@ def test_local_config_is_ignored_by_gitignore_contract():
     if not gitignore.exists():
         gitignore = Path("/home/dase-hw101/piper-pipeline-testbed/.gitignore")
     assert "piper-on-bunker/config/*.local.yaml" in gitignore.read_text(encoding="utf-8")
+
+
+def test_endpoint_settling_time_excludes_departure_duration():
+    cfg = Phase0AConfig(settle_timeout_s=1.0, endpoint_tolerance_rad=0.03)
+    backend = SequenceBackend([
+        JointStateSnapshot(JOINTS, [0.2] * 6, 0.0, [0.0] * 6, 1.0, "/piper_x/joint_states"),
+        JointStateSnapshot(JOINTS, [0.0] * 6, 0.0, [0.0] * 6, 2.0, "/piper_x/joint_states"),
+    ])
+    times = iter([100.0, 100.1, 100.2, 100.3])
+    result = wait_for_endpoint_settling(backend, poses()["staging"], cfg, now_fn=lambda: next(times), sleep_fn=lambda _: None)
+    assert result["endpoint_reached"]
+    assert result["endpoint_settling_time_s"] == pytest.approx(0.3)
+    assert result["joint_state_read_count"] == 2
+
+
+def test_endpoint_settling_loops_until_feedback_enters_tolerance():
+    cfg = Phase0AConfig(settle_timeout_s=1.0, endpoint_tolerance_rad=0.03)
+    backend = SequenceBackend([
+        JointStateSnapshot(JOINTS, [0.2] * 6, 0.0, [0.0] * 6, 1.0, "/piper_x/joint_states"),
+        JointStateSnapshot(JOINTS, [0.04] * 6, 0.0, [0.0] * 6, 2.0, "/piper_x/joint_states"),
+        JointStateSnapshot(JOINTS, [0.01] * 6, 0.0, [0.0] * 6, 3.0, "/piper_x/joint_states"),
+    ])
+    clock = {"t": 0.0}
+    result = wait_for_endpoint_settling(backend, poses()["staging"], cfg, now_fn=lambda: clock["t"], sleep_fn=lambda dt: clock.__setitem__("t", clock["t"] + dt))
+    assert result["endpoint_reached"]
+    assert result["joint_state_read_count"] == 3
+    assert result["maximum_joint_error_rad"] == pytest.approx(0.01)
+
+
+def test_settle_timeout_and_stale_feedback_are_recorded():
+    cfg = Phase0AConfig(settle_timeout_s=0.1, endpoint_tolerance_rad=0.03, max_joint_state_age_s=0.05)
+    backend = SequenceBackend([
+        JointStateSnapshot(JOINTS, [0.2] * 6, 0.2, [0.0] * 6, 1.0, "/piper_x/joint_states"),
+        JointStateSnapshot(JOINTS, [0.2] * 6, 0.2, [0.0] * 6, 2.0, "/piper_x/joint_states"),
+    ])
+    clock = {"t": 0.0}
+    result = wait_for_endpoint_settling(backend, poses()["staging"], cfg, now_fn=lambda: clock["t"], sleep_fn=lambda dt: clock.__setitem__("t", clock["t"] + dt), sample_period_s=0.05)
+    assert not result["endpoint_reached"]
+    assert result["timeout"]
+    assert result["stale_feedback_events"] >= 2
+    assert result["maximum_observed_feedback_age_s"] == pytest.approx(0.2)
+
+
+def test_incomplete_feedback_prevents_endpoint_success():
+    cfg = Phase0AConfig(settle_timeout_s=0.1, endpoint_tolerance_rad=0.03)
+    backend = SequenceBackend([
+        JointStateSnapshot(["joint1"], [0.0], 0.0, [0.0], 1.0, "/piper_x/joint_states"),
+    ])
+    clock = {"t": 0.0}
+    result = wait_for_endpoint_settling(backend, poses()["staging"], cfg, now_fn=lambda: clock["t"], sleep_fn=lambda dt: clock.__setitem__("t", clock["t"] + dt), sample_period_s=0.05)
+    assert not result["endpoint_reached"]
+    assert result["incomplete_feedback_events"] >= 1
+
+
+def _run_cancel_case(tmp_path, monkeypatch, cancel_on):
+    runner = _load_repeatability_script()
+    runner.CANCEL_REQUESTED = False
+    backend_holder = {}
+
+    class Backend(ExecutingBackend):
+        pass
+
+    Backend.cancel_on = cancel_on
+    Backend.runner = runner
+
+    def factory(*args, **kwargs):
+        backend = Backend()
+        backend.reads = 0
+        backend_holder["backend"] = backend
+        return backend
+
+    stop_script = tmp_path / "stop.sh"
+    stop_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    stop_script.chmod(0o755)
+    cfg = Phase0AConfig(
+        output_root=str(tmp_path),
+        lock_path=str(tmp_path / "lock"),
+        stop_command=(str(stop_script),),
+        arm_id="left",
+        physical_mounting_id="mount",
+        camera_serial="cam",
+        camera_mount_id="cam_mount",
+        tool_id="tool",
+        physical_execution_enabled_by_default=True,
+        measurement_pose_name="staging",
+        allowed_departure_pose_names=("repeatability_departure",),
+        default_departure_pose_name="repeatability_departure",
+    )
+    monkeypatch.setattr(runner, "build_readiness_report", lambda *a, **k: {"physical_ready": True, "physical_blockers": []})
+    monkeypatch.setattr(runner, "load_touch_config", lambda path: type("Cfg", (), {"joint_limits": LIMITS, "motion_profiles": {"transit": {"velocity_scaling": 0.1, "acceleration_scaling": 0.1}}, "execution_timeout_s": 1.0})())
+    monkeypatch.setattr(runner, "load_taught_poses", lambda path: poses())
+    monkeypatch.setattr(runner, "RosMoveItJointSequenceBackend", factory)
+    args = type("Args", (), {
+        "departure_pose": "repeatability_departure",
+        "measurement_pose": "staging",
+        "confirm": PHASE_0A_CONFIRMATION_TOKEN,
+        "confirm_base_stopped": PHASE_0A_BASE_STOPPED_TOKEN,
+        "checklist": "ignored.yaml",
+        "cycles": 1,
+        "diagnostic_id": f"diag_{cancel_on}",
+        "artifact_dir": str(tmp_path / f"artifact_{cancel_on}"),
+    })()
+    result = runner._execute_repeat_pose(cfg, args)
+    return result, backend_holder["backend"]
+
+
+def test_cancellation_before_departure_invokes_stop_paths(tmp_path, monkeypatch):
+    result, backend = _run_cancel_case(tmp_path, monkeypatch, "after_initial")
+    assert not result["success"]
+    assert backend.stopped
+    assert result["motion_reporting"]["stop_attempted"]
+    assert result["motion_reporting"]["stop_succeeded"] is True
+    assert result["motion_reporting"]["return_to_staging_status"] != "completed"
+    assert result["motion_reporting"]["current_physical_pose_status"] == "unknown"
+
+
+def test_cancellation_after_departure_invokes_stop_paths_and_saves_partial_cycle(tmp_path, monkeypatch):
+    result, backend = _run_cancel_case(tmp_path, monkeypatch, "after_departure")
+    assert not result["success"]
+    assert backend.stopped
+    assert result["motion_reporting"]["completed_motion_segments"] == 2
+    assert result["motion_reporting"]["return_to_staging_status"] != "completed"
+    cycles = (Path(result["artifact_dir"]) / "cycles.jsonl").read_text(encoding="utf-8")
+    assert "after_departure" in cycles
+
+
+def test_sigterm_cancellation_uses_common_stop_path(tmp_path, monkeypatch):
+    runner = _load_repeatability_script()
+    runner.CANCEL_REQUESTED = False
+    backend_holder = {}
+
+    class Backend(ExecutingBackend):
+        pass
+
+    Backend.cancel_on = None
+    Backend.runner = runner
+
+    def factory(*args, **kwargs):
+        backend = Backend()
+        backend.reads = 0
+        backend_holder["backend"] = backend
+        return backend
+
+    stop_script = tmp_path / "stop.sh"
+    stop_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    stop_script.chmod(0o755)
+    cfg = Phase0AConfig(
+        output_root=str(tmp_path),
+        lock_path=str(tmp_path / "lock"),
+        stop_command=(str(stop_script),),
+        physical_execution_enabled_by_default=True,
+        arm_id="left",
+        physical_mounting_id="mount",
+        camera_serial="cam",
+        camera_mount_id="cam_mount",
+        tool_id="tool",
+    )
+    monkeypatch.setattr(runner, "build_readiness_report", lambda *a, **k: {"physical_ready": True, "physical_blockers": []})
+    monkeypatch.setattr(runner, "load_touch_config", lambda path: type("Cfg", (), {"joint_limits": LIMITS, "motion_profiles": {"transit": {"velocity_scaling": 0.1, "acceleration_scaling": 0.1}}, "execution_timeout_s": 1.0})())
+    monkeypatch.setattr(runner, "load_taught_poses", lambda path: poses())
+    monkeypatch.setattr(runner, "RosMoveItJointSequenceBackend", factory)
+    args = type("Args", (), {"departure_pose": "repeatability_departure", "measurement_pose": "staging", "confirm": PHASE_0A_CONFIRMATION_TOKEN, "confirm_base_stopped": PHASE_0A_BASE_STOPPED_TOKEN, "checklist": "ignored.yaml", "cycles": 1, "diagnostic_id": "diag_sigterm", "artifact_dir": str(tmp_path / "artifact_sigterm")})()
+    runner._handle_signal(15, None)
+    result = runner._execute_repeat_pose(cfg, args)
+    assert not result["success"]
+    assert runner.CANCEL_REQUESTED is True
+    assert backend_holder["backend"].stopped
+    assert result["motion_reporting"]["stop_attempted"]
+    assert result["motion_reporting"]["motion_commanded"] is False
+
+
+def test_successful_run_does_not_invoke_emergency_stop(tmp_path, monkeypatch):
+    runner = _load_repeatability_script()
+    backend_holder = {}
+
+    class Backend(ExecutingBackend):
+        pass
+
+    Backend.cancel_on = None
+    Backend.runner = runner
+
+    def factory(*args, **kwargs):
+        backend = Backend()
+        backend.reads = 0
+        backend_holder["backend"] = backend
+        return backend
+
+    stop_script = tmp_path / "stop.sh"
+    stop_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    stop_script.chmod(0o755)
+    cfg = Phase0AConfig(output_root=str(tmp_path), lock_path=str(tmp_path / "lock"), stop_command=(str(stop_script),), physical_execution_enabled_by_default=True, arm_id="left", physical_mounting_id="mount", camera_serial="cam", camera_mount_id="cam_mount", tool_id="tool")
+    monkeypatch.setattr(runner, "build_readiness_report", lambda *a, **k: {"physical_ready": True, "physical_blockers": []})
+    monkeypatch.setattr(runner, "load_touch_config", lambda path: type("Cfg", (), {"joint_limits": LIMITS, "motion_profiles": {"transit": {"velocity_scaling": 0.1, "acceleration_scaling": 0.1}}, "execution_timeout_s": 1.0})())
+    monkeypatch.setattr(runner, "load_taught_poses", lambda path: poses())
+    monkeypatch.setattr(runner, "RosMoveItJointSequenceBackend", factory)
+    monkeypatch.setattr(runner, "wait_for_endpoint_settling", lambda *a, **k: {"endpoint_reached": True, "endpoint_settling_time_s": 0.1, "settling_time_s": 0.1, "timeout": False, "joint_state_read_count": 1, "stale_feedback_events": 0, "incomplete_feedback_events": 0, "maximum_observed_feedback_age_s": 0.0, "feedback_timestamps_monotonic": True, "maximum_joint_error_rad": 0.0, "per_joint_signed_error": {name: 0.0 for name in JOINTS}, "per_joint_abs_error": {name: 0.0 for name in JOINTS}, "rms_joint_error_rad": 0.0, "final_measured_joint_values": [0.0] * 6})
+    args = type("Args", (), {"departure_pose": "repeatability_departure", "measurement_pose": "staging", "confirm": PHASE_0A_CONFIRMATION_TOKEN, "confirm_base_stopped": PHASE_0A_BASE_STOPPED_TOKEN, "checklist": "ignored.yaml", "cycles": 1, "diagnostic_id": "diag_success", "artifact_dir": str(tmp_path / "artifact_success")})()
+    result = runner._execute_repeat_pose(cfg, args)
+    assert result.get("success", True) is not False
+    assert not backend_holder["backend"].stopped
+    assert result["motion_reporting"]["stop_attempted"] is False
+    assert result["motion_reporting"]["return_to_staging_status"] == "completed"

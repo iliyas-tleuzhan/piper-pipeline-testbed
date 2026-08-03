@@ -102,6 +102,10 @@ def endpoint_settling_metrics(cycles: list[dict[str, Any]]) -> dict[str, Any]:
         "timeout_count": sum(1 for c in cycles if c.get("timeout")),
         "controller_abort_count": sum(1 for c in cycles if c.get("controller_result") == "aborted"),
         "stale_feedback_count": sum(int(c.get("stale_feedback_events", 0)) for c in cycles),
+        "incomplete_feedback_count": sum(int(c.get("incomplete_feedback_events", 0)) for c in cycles),
+        "joint_state_read_count": sum(int(c.get("joint_state_read_count", 0)) for c in cycles),
+        "maximum_observed_feedback_age_s": max((float(c.get("maximum_observed_feedback_age_s") or 0.0) for c in cycles), default=0.0),
+        "feedback_timestamps_monotonic": all(bool(c.get("feedback_timestamps_monotonic", True)) for c in cycles),
     }
 
 

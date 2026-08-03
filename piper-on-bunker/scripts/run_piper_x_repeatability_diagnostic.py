@@ -28,6 +28,7 @@ from piper_on_bunker.calibration.piper_x_repeatability import (
     run_observation_mode,
     validate_measurement_departure,
     validate_taught_pose_for_phase0a,
+    wait_for_endpoint_settling,
 )
 from piper_on_bunker.calibration.piper_x_repeatability_artifacts import Phase0AArtifactWriter
 from piper_on_bunker.calibration.piper_x_repeatability_contract import PHASE_0A_BASE_STOPPED_TOKEN, PHASE_0A_CONFIRMATION_TOKEN
@@ -132,6 +133,37 @@ def _planning_only(config, args) -> dict:
     }
 
 
+def _finalize_aborted_run(*, config, writer, manifest, diag_id: str, artifact_dir: Path, motion_state: MotionExecutionState, cycles: list[dict], final_positions: list[list[float]], reason: BaseException | str, backend=None) -> dict:
+    motion_state.current_physical_pose_status = "unknown"
+    invoke_stop(config, backend, motion_state)
+    manifest["completed_at"] = utc_now()
+    manifest["test"]["completed_cycles"] = len(final_positions)
+    manifest["motion_reporting"] = motion_state.as_dict()
+    manifest["results"].setdefault("blockers", []).append(str(reason))
+    manifest["results"]["classification"] = "TEST_ABORTED"
+    manifest["results"]["phase_0a_passed"] = False
+    writer.write_manifest(manifest)
+    writer.write_joint_summary({})
+    writer.write_report(
+        {
+            "diagnostic_id": diag_id,
+            "classification": "TEST_ABORTED",
+            "phase_0a": manifest["results"].get("phase_0a", {}),
+            "completed_cycles": len(final_positions),
+            "blockers": manifest["results"].get("blockers", []),
+            "motion_reporting": motion_state.as_dict(),
+        }
+    )
+    return {
+        "success": False,
+        "reason": repr(reason) if not isinstance(reason, str) else reason,
+        "artifact_dir": str(artifact_dir),
+        "manifest": manifest,
+        "motion_commanded": motion_state.motion_commanded,
+        "motion_reporting": motion_state.as_dict(),
+    }
+
+
 def _execute_repeat_pose(config, args) -> dict:
     departure = args.departure_pose or config.default_departure_pose_name
     measurement = args.measurement_pose or config.measurement_pose_name
@@ -155,96 +187,111 @@ def _execute_repeat_pose(config, args) -> dict:
     manifest["test"]["measurement_pose_target_positions"] = list(measurement_pose.positions)
     manifest["test"]["joint_names"] = list(measurement_pose.joint_names)
     manifest["results"]["operator_observations"]["mechanical_checklist_completed"] = True
-    cycles = []
-    final_positions = []
+    cycles: list[dict] = []
+    final_positions: list[list[float]] = []
     aborted = False
     try:
         with phase0a_lock(config.lock_path):
             backend = RosMoveItJointSequenceBackend(touch_config, joint_topic=config.joint_state_topic)
             motion_state.physical_backend_connected = True
             plans = plan_repeatability_segments(config, measurement_pose_name=measurement, departure_pose_name=departure, backend=backend, touch_config=touch_config, poses=poses, cycles=args.cycles)
-            # plans: initial_to_measurement, then departure/return pairs
             plan_index = 0
             initial = plans[plan_index]
             plan_index += 1
+            if CANCEL_REQUESTED:
+                motion_state.cancellation_requested = True
+                raise RuntimeError("operator cancellation requested before initial measurement move")
             motion_state.execution_attempted = True
-            if not backend.execute_plan(initial, touch_config.execution_timeout_s):
-                aborted = True
-                motion_state.motion_commanded = True
-                motion_state.return_to_staging_status = "initial_measurement_failed"
-                raise RuntimeError("initial move to measurement pose failed")
+            initial_start = time.monotonic()
+            initial_ok = backend.execute_plan(initial, touch_config.execution_timeout_s)
             motion_state.motion_commanded = True
+            if not initial_ok:
+                motion_state.return_to_staging_status = "unknown"
+                raise RuntimeError("initial move to measurement pose failed")
             motion_state.completed_motion_segments += 1
+            motion_state.current_physical_pose_status = "measurement_unverified"
+            manifest["test"]["initial_measurement_execution_duration_s"] = time.monotonic() - initial_start
             for cycle_index in range(args.cycles):
+                cycle_number = cycle_index + 1
+                motion_state.current_cycle = cycle_number
                 if CANCEL_REQUESTED:
                     motion_state.cancellation_requested = True
-                    aborted = True
-                    break
-                motion_state.current_cycle = cycle_index + 1
+                    cycles.append({"cycle_index": cycle_number, "segment": "before_departure", "controller_result": "cancelled", "endpoint_reached": False, "measurement_recorded": False, "return_to_staging_status": "unknown", "motion_reporting": motion_state.as_dict()})
+                    writer.append_cycle(cycles[-1])
+                    raise RuntimeError("operator cancellation requested before departure")
                 departure_plan = plans[plan_index]
                 return_plan = plans[plan_index + 1]
                 plan_index += 2
-                started = time.time()
+                full_cycle_started = time.monotonic()
                 motion_state.execution_attempted = True
-                if not backend.execute_plan(departure_plan, touch_config.execution_timeout_s):
-                    aborted = True
-                    motion_state.motion_commanded = True
-                    cycles.append({"cycle_index": cycle_index + 1, "segment": "departure", "controller_result": "aborted", "endpoint_reached": False, "measurement_recorded": False, "motion_reporting": motion_state.as_dict()})
-                    writer.append_cycle(cycles[-1])
-                    break
+                departure_started = time.monotonic()
+                departure_ok = backend.execute_plan(departure_plan, touch_config.execution_timeout_s)
                 motion_state.motion_commanded = True
+                departure_duration = time.monotonic() - departure_started
+                if not departure_ok:
+                    cycles.append({"cycle_index": cycle_number, "segment": "departure", "controller_result": "aborted", "endpoint_reached": False, "measurement_recorded": False, "departure_execution_duration_s": departure_duration, "return_to_staging_status": "unknown", "motion_reporting": motion_state.as_dict()})
+                    writer.append_cycle(cycles[-1])
+                    raise RuntimeError("departure trajectory execution failed")
                 motion_state.completed_motion_segments += 1
+                motion_state.current_physical_pose_status = "departure_unverified"
                 if CANCEL_REQUESTED:
                     motion_state.cancellation_requested = True
-                    aborted = True
-                    break
-                if not backend.execute_plan(return_plan, touch_config.execution_timeout_s):
-                    aborted = True
-                    motion_state.motion_commanded = True
-                    motion_state.return_to_staging_status = "return_measurement_failed"
-                    cycles.append({"cycle_index": cycle_index + 1, "segment": "return_measurement", "controller_result": "aborted", "endpoint_reached": False, "measurement_recorded": False, "motion_reporting": motion_state.as_dict()})
+                    cycles.append({"cycle_index": cycle_number, "segment": "after_departure", "controller_result": "cancelled", "endpoint_reached": False, "measurement_recorded": False, "departure_execution_duration_s": departure_duration, "return_to_staging_status": "unknown", "motion_reporting": motion_state.as_dict()})
                     writer.append_cycle(cycles[-1])
-                    break
+                    raise RuntimeError("operator cancellation requested after departure")
+                return_started = time.monotonic()
+                return_ok = backend.execute_plan(return_plan, touch_config.execution_timeout_s)
+                motion_state.motion_commanded = True
+                return_duration = time.monotonic() - return_started
+                if not return_ok:
+                    motion_state.return_to_staging_status = "unknown"
+                    cycles.append({"cycle_index": cycle_number, "segment": "return_measurement", "controller_result": "aborted", "endpoint_reached": False, "measurement_recorded": False, "departure_execution_duration_s": departure_duration, "return_execution_duration_s": return_duration, "return_to_staging_status": "unknown", "motion_reporting": motion_state.as_dict()})
+                    writer.append_cycle(cycles[-1])
+                    raise RuntimeError("return-to-measurement trajectory execution failed")
                 motion_state.completed_motion_segments += 1
-                motion_state.return_to_staging_status = "completed"
-                state = backend.read_joint_state()
-                elapsed = time.time() - started
-                errors = [float(actual) - float(target) for actual, target in zip(state.positions, measurement_pose.positions)]
+                motion_state.return_to_staging_status = "return_command_finished_unverified"
+                settle = wait_for_endpoint_settling(backend, measurement_pose, config)
+                motion_state.current_physical_pose_status = "measurement_verified" if settle["endpoint_reached"] else "unknown"
+                motion_state.return_to_staging_status = "completed" if settle["endpoint_reached"] else "unknown"
+                errors = settle.get("per_joint_signed_error") or {}
                 cycle = {
-                    "cycle_index": cycle_index + 1,
+                    "cycle_index": cycle_number,
                     "segment": "return_measurement",
-                    "controller_result": "succeeded",
-                    "endpoint_reached": max(abs(v) for v in errors) <= config.endpoint_tolerance_rad,
-                    "measurement_recorded": True,
+                    "controller_result": "succeeded" if settle["endpoint_reached"] else "settle_timeout",
+                    "endpoint_reached": bool(settle["endpoint_reached"]),
+                    "measurement_recorded": bool(settle["endpoint_reached"]),
                     "target_joint_values": list(measurement_pose.positions),
-                    "final_measured_joint_values": list(state.positions),
-                    "per_joint_signed_error": dict(zip(state.joint_names, errors)),
-                    "per_joint_abs_error": dict(zip(state.joint_names, [abs(v) for v in errors])),
-                    "maximum_joint_error_rad": max(abs(v) for v in errors),
-                    "rms_joint_error_rad": (sum(v * v for v in errors) / len(errors)) ** 0.5,
-                    "settling_time_s": elapsed,
+                    "final_measured_joint_values": settle.get("final_measured_joint_values"),
+                    "per_joint_signed_error": errors,
+                    "per_joint_abs_error": settle.get("per_joint_abs_error") or {},
+                    "maximum_joint_error_rad": settle.get("maximum_joint_error_rad"),
+                    "rms_joint_error_rad": settle.get("rms_joint_error_rad"),
+                    "departure_execution_duration_s": departure_duration,
+                    "return_execution_duration_s": return_duration,
+                    "endpoint_settling_time_s": settle["endpoint_settling_time_s"],
+                    "settling_time_s": settle["settling_time_s"],
+                    "full_cycle_duration_s": time.monotonic() - full_cycle_started,
                     "command_duration_s": return_plan.estimated_duration_s,
-                    "execution_duration_s": elapsed,
-                    "stale_feedback_events": 0,
-                    "timeout": False,
+                    "execution_duration_s": return_duration,
+                    "joint_state_read_count": settle["joint_state_read_count"],
+                    "stale_feedback_events": settle["stale_feedback_events"],
+                    "incomplete_feedback_events": settle["incomplete_feedback_events"],
+                    "maximum_observed_feedback_age_s": settle["maximum_observed_feedback_age_s"],
+                    "feedback_timestamps_monotonic": settle["feedback_timestamps_monotonic"],
+                    "timeout": settle["timeout"],
+                    "return_to_staging_status": motion_state.return_to_staging_status,
                     "motion_reporting": motion_state.as_dict(),
                 }
                 cycles.append(cycle)
-                final_positions.append(list(state.positions))
                 writer.append_cycle(cycle)
+                if not settle["endpoint_reached"]:
+                    raise RuntimeError("endpoint settling failed or timed out after return trajectory")
+                final_positions.append(list(settle["final_measured_joint_values"] or []))
     except BaseException as exc:
         aborted = True
-        invoke_stop(config, backend, motion_state)
-        manifest["completed_at"] = utc_now()
-        manifest["motion_reporting"] = motion_state.as_dict()
-        manifest["results"].setdefault("blockers", []).append(repr(exc))
-        manifest["results"]["classification"] = "TEST_ABORTED"
-        manifest["results"]["phase_0a_passed"] = False
-        writer.write_manifest(manifest)
-        writer.write_report({"diagnostic_id": diag_id, "classification": "TEST_ABORTED", "phase_0a": manifest["results"].get("phase_0a", {}), "completed_cycles": len(final_positions), "blockers": manifest["results"].get("blockers", []), "motion_reporting": motion_state.as_dict()})
-        return {"success": False, "reason": repr(exc), "artifact_dir": str(artifact_dir), "manifest": manifest, "motion_commanded": motion_state.motion_commanded, "motion_reporting": motion_state.as_dict()}
+        return _finalize_aborted_run(config=config, writer=writer, manifest=manifest, diag_id=diag_id, artifact_dir=artifact_dir, motion_state=motion_state, cycles=cycles, final_positions=final_positions, reason=exc, backend=backend)
     joint_metrics = joint_repeatability_metrics(joint_names=list(measurement_pose.joint_names), target_positions=list(measurement_pose.positions), final_positions_by_cycle=final_positions) if final_positions else None
-    settling = endpoint_settling_metrics([c for c in cycles if c.get("measurement_recorded")])
+    settling = endpoint_settling_metrics([c for c in cycles if c.get("measurement_recorded") or c.get("timeout")])
     physical = {"available": False, "sample_count": 0, "status": "UNKNOWN"}
     classification, passed, blockers, phase = classify_phase0a(completed_cycles=len(final_positions), joint_metrics=joint_metrics, settling=settling, physical_metrics=physical, thresholds=config.thresholds, aborted=aborted, checklist_passed=True)
     manifest["completed_at"] = utc_now()
@@ -255,7 +302,6 @@ def _execute_repeat_pose(config, args) -> dict:
     writer.write_joint_summary(joint_metrics or {})
     writer.write_report({"diagnostic_id": diag_id, "classification": classification, "phase_0a": phase, "completed_cycles": len(final_positions), "blockers": blockers, "motion_reporting": motion_state.as_dict()})
     return {"artifact_dir": str(artifact_dir), "manifest": manifest, "motion_commanded": motion_state.motion_commanded, "motion_reporting": motion_state.as_dict()}
-
 
 def main() -> int:
     signal.signal(signal.SIGINT, _handle_signal)

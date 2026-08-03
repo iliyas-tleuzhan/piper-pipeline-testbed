@@ -46,7 +46,17 @@ samples:  [-0.458, -0.099, 0.949]
 
 Additional FK diagnostics showed `/joint_states_single` and `/joint_states` copy joints 1-6 exactly, but `/end_pose` and `base_link -> gripper_base` disagree by roughly 6-13 cm and changing orientation. A single constant TCP transform does not explain the mismatch.
 
-Do not recalibrate until the FK verification gate passes.
+Do not recalibrate until Phase 0A repeatability diagnostics, joint-zero
+verification, FK validation, and TCP measurement have been addressed. The first
+new gate is documented in:
+
+```text
+docs/calibration/PIPER_X_PHASE_0A_REPEATABILITY.md
+```
+
+Phase 0A does not validate FK or hand-eye; it determines whether feedback,
+controller settling, and physical endpoint repeatability are credible enough to
+continue to joint-zero and FK work.
 
 ## Runtime
 

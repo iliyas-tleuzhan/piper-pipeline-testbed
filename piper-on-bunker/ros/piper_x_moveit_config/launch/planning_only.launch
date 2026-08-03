@@ -1,0 +1,34 @@
+<launch>
+  <arg name="pipeline" default="ompl"/>
+  <arg name="use_rviz" default="false"/>
+  <arg name="debug" default="false"/>
+  <arg name="info" default="true"/>
+  <arg name="robot_xacro" default="$(find agx_arm_description)/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro"/>
+
+  <param name="robot_description" command="$(find xacro)/xacro $(arg robot_xacro)"/>
+  <param name="robot_description_semantic" textfile="$(find piper_x_moveit_config)/config/piper_x.srdf"/>
+  <group ns="robot_description_planning">
+    <rosparam command="load" file="$(find piper_x_moveit_config)/config/joint_limits.yaml"/>
+    <rosparam command="load" file="$(find piper_x_moveit_config)/config/cartesian_limits.yaml"/>
+  </group>
+  <group ns="robot_description_kinematics">
+    <rosparam command="load" file="$(find piper_x_moveit_config)/config/kinematics.yaml"/>
+  </group>
+
+  <param name="/piper_x_moveit/model_source" value="agx_arm_description piper_x_with_gripper_description.xacro"/>
+  <param name="/piper_x_moveit/model_verified" value="false"/>
+  <param name="/piper_x_moveit/model_bounds_override" value="joint3 upper bound is widened in the runtime-staged URDF for small encoder/model zero tolerance; PiPER-X FK remains unverified"/>
+  <param name="/piper_x_moveit/physical_execution_blocked_reason" value="PiPER-X URDF/FK is not yet verified against the physical arm"/>
+
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" output="screen"/>
+
+  <include file="$(find piper_x_moveit_config)/launch/move_group.launch">
+    <arg name="pipeline" value="$(arg pipeline)"/>
+    <arg name="debug" value="$(arg debug)"/>
+    <arg name="info" value="$(arg info)"/>
+  </include>
+
+  <include file="$(find piper_x_moveit_config)/launch/rviz.launch" if="$(arg use_rviz)">
+    <arg name="debug" value="$(arg debug)"/>
+  </include>
+</launch>

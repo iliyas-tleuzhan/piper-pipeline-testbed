@@ -1,0 +1,113 @@
+profile_id: piper_x_moveit_touch_aruco_fixed_v1
+task_id: touch_fixed_aruco_original_id6_v1
+
+marker:
+  dictionary: DICT_ARUCO_ORIGINAL
+  id: 6
+  size_m: 0.100
+
+camera:
+  image_topic: /wrist_camera/color/image_rect_color
+  marker_pose_topic: /aruco_simple/pose
+
+moveit:
+  planning_group: arm
+  end_effector_link: gripper_base
+  planning_frame: world
+  move_group_required: true
+
+taught_poses:
+  staging: staging
+  home: home
+  pre_touch: pre_touch
+  touch: touch
+  retract: retract
+  safe_recovery: safe_recovery
+  manifest: piper-on-bunker/data/local/moveit_aruco_touch/taught_poses.yaml
+
+feedback:
+  authoritative_joint_state_topic: /piper_x/joint_states
+  required_feedback_source_id: piper_x_passive_socketcan_feedback_v1
+  required_joint_mapping_version: piper_x_lora_feedback_2a5_2a6_2a7_raw001deg_to_rad_v1
+  required_dependency_repo: /home/dase-hw101/Iliyas/piper-lora-teleop-bridge
+  required_dependency_commit: 521c9c5fdfd9ee63bd96c0f9342fca6b2398092e
+  configured_arm_model: agilex_piper_x
+  configured_firmware_profile: unresolved_passive_feedback_only
+  adapter_type: passive_socketcan
+  source_can_ids: [0x2A5, 0x2A6, 0x2A7]
+  frame_units: raw signed int32 big-endian 0.001 degrees converted to radians
+  normal_piper_joint_state_topic_rejected: /joint_states_single
+  invalidated_pose_reason: normal PiPER piper_ctrl_single_node published fresh all-zero feedback from nondecoded PiPER-X CAN frames
+
+motion:
+  motion_strategy: taught_joint_sequence
+  hold_duration_s: 1.0
+  # Deprecated fallback fields kept for older smoke tooling. Runtime planning
+  # uses the per-segment motion_profiles below.
+  velocity_scaling: 0.05
+  acceleration_scaling: 0.05
+  motion_profiles:
+    transit:
+      velocity_scaling: 0.10
+      acceleration_scaling: 0.10
+    approach:
+      velocity_scaling: 0.05
+      acceleration_scaling: 0.05
+    touch:
+      velocity_scaling: 0.02
+      acceleration_scaling: 0.02
+    retract:
+      velocity_scaling: 0.05
+      acceleration_scaling: 0.05
+  planning_timeout_s: 10.0
+  execution_timeout_s: 20.0
+  max_joint_jump_rad: 0.20
+  max_adjacent_joint_delta_rad: 0.10
+  max_segment_duration_s: 30.0
+  max_mission_duration_s: 90.0
+  home_transit_diagnostic_max_mission_duration_s: 240.0
+  large_pose_delta_review_threshold_rad: 1.0
+  segment_duration_limits_s:
+    move_staging: 30.0
+    move_pre_touch: 30.0
+    move_touch: 15.0
+    move_retract: 15.0
+    move_staging_final: 30.0
+    move_home: 90.0
+    move_home_final: 90.0
+  min_effective_joint_velocity_rad_s: 0.001
+  max_target_error_rad: 0.02
+  continuity_tolerance_rad: 0.001
+  future_cartesian_mode:
+    enabled: false
+    touch_direction_ee: [0.0, 0.0, 1.0]
+    press_distance_m: 0.020
+    retract_distance_m: 0.020
+    cartesian_fraction_threshold: 1.0
+
+safety:
+  max_marker_pose_age_s: 0.5
+  max_image_age_s: 0.5
+  max_joint_state_age_s: 0.5
+  marker_stability_required_s: 0.5
+  # Teaching-only tolerance for small encoder/model zero disagreements while
+  # PiPER-X FK remains unverified. This does not authorize physical execution.
+  taught_pose_limit_tolerance_rad: 0.02
+  physical_execution_enabled_by_default: false
+  joint_limits:
+    joint1: [-2.618, 2.618]
+    joint2: [-2.618, 2.618]
+    joint3: [-2.967, 0.0]
+    joint4: [-1.745, 1.745]
+    joint5: [-1.22, 1.22]
+    joint6: [-2.094, 2.094]
+  workspace_limits:
+    x_m: [-0.10, 0.70]
+    y_m: [-0.40, 0.40]
+    z_m: [0.02, 0.80]
+
+robot_model:
+  model: agilex_piper_x_unverified
+  urdf_candidate_path: /home/dase-hw101/Iliyas/piper-vr-teleop/third_party/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro
+  urdf_candidate_sha256: 0ee3f52f9acf3060a7f3e439c6e5e46b6a53d4fa509dd495045548be6b7f90cd
+  piper_x_model_verified: false

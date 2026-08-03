@@ -1,0 +1,63 @@
+profile_id: piper_x_visual_servo_aruco_touch_v1
+task_id: wrist_depth_align_touch_aruco_original_id6_v1
+
+marker:
+  dictionary: DICT_ARUCO_ORIGINAL
+  id: 6
+  size_m: 0.100
+
+camera:
+  color_image_topic: /wrist_camera/color/image_rect_color
+  depth_image_topic: /wrist_camera/aligned_depth_to_color/image_raw
+  camera_info_topic: /wrist_camera/color/camera_info
+  image_geometry_mode: rectified
+
+frames:
+  gripper_frame: gripper_base
+  camera_frame: wrist_camera_color_optical_frame
+
+moveit:
+  planning_group: arm
+  end_effector_link: gripper_base
+
+handeye:
+  source: UNVERIFIED_LOCAL_VALUE_REQUIRED
+  verified: false
+  # Transform gripper_base -> wrist_camera_color_optical_frame.
+  # Replace in an ignored local copy only after validation. Do not paste the
+  # rejected 2026-07-30 calibration here as verified.
+  translation_xyz_m: [0.0, 0.0, 0.0]
+  quaternion_xyzw: [0.0, 0.0, 0.0, 1.0]
+
+gripper:
+  tip_offset_source: UNMEASURED_LOCAL_VALUE_REQUIRED
+  # Contact tip location expressed in gripper_base coordinates.
+  tip_offset_from_gripper_base_xyz_m: [0.0, 0.0, 0.0]
+
+depth:
+  roi_px: 7
+  min_depth_m: 0.030
+  max_depth_m: 0.800
+
+alignment:
+  image_center_tolerance_px: 24.0
+  max_lateral_step_m: 0.010
+  max_forward_step_m: 0.020
+  simple_up_step_m: 0.020
+  simple_forward_step_m: 0.020
+  simple_forward_axis_world: [1.0, 0.0, 0.0]
+  continuous_forward_stop_depth_m: 0.010
+  continuous_max_forward_m: 0.150
+  continuous_max_forward_steps: 10
+  forward_lock_joint1_tolerance_rad: 0.010
+  max_alignment_iterations: 6
+  cartesian_eef_step_m: 0.005
+  cartesian_fraction_threshold: 1.0
+  contact_clearance_m: 0.003
+
+safety:
+  max_image_age_s: 0.5
+  max_depth_age_s: 0.5
+  max_joint_state_age_s: 0.5
+  require_verified_handeye_for_execution: true
+  physical_execution_enabled_by_default: false

@@ -3,10 +3,12 @@ import pytest
 
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import VisualServoTouchConfig
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import clamp_step
+from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import camera_tip_alignment_uv
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import deproject_pixel
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import depth_roi_m
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import estimate_depth_touch_step
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import load_visual_servo_touch_config
+from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import remaining_tip_forward_distance_m
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import split_alignment_and_forward_steps
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import transform_camera_point_to_gripper
 
@@ -47,6 +49,7 @@ def _config(**overrides):
             "quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
         },
         "gripper": {"tip_offset_source": "measured_test", "tip_offset_from_gripper_base_xyz_m": [0.0, 0.0, 0.05]},
+        "demo": {"camera_to_tip_offset_source": "test", "camera_to_tip_offset_camera_xyz_m": [0.0, 0.07, 0.05]},
         "depth": {"roi_px": 7, "min_depth_m": 0.03, "max_depth_m": 0.8},
         "alignment": {
             "image_center_tolerance_px": 24.0,
@@ -80,6 +83,15 @@ def test_depth_roi_uses_median_and_converts_16uc1():
 def test_deproject_pixel_to_camera_point():
     assert deproject_pixel(_camera_matrix(), u=160, v=120, depth_m=0.4) == pytest.approx([0.0, 0.0, 0.4])
     assert deproject_pixel(_camera_matrix(), u=186, v=120, depth_m=0.4) == pytest.approx([0.04, 0.0, 0.4])
+
+
+def test_camera_tip_offset_projects_downward_alignment_target_and_forward_remaining_distance():
+    assert camera_tip_alignment_uv(
+        _camera_matrix(), marker_depth_m=0.4, camera_tip_offset_camera_xyz_m=[0.0, 0.07, 0.05]
+    ) == pytest.approx((160.0, 165.5))
+    assert remaining_tip_forward_distance_m(
+        0.4, camera_tip_offset_camera_xyz_m=[0.0, 0.07, 0.05], contact_clearance_m=0.003
+    ) == pytest.approx(0.347)
 
 
 def test_transform_camera_point_to_gripper_applies_eye_in_hand_translation():

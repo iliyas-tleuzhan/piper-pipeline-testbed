@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Plan/report a PiPER-X wrist-depth ArUco alignment touch step.
 
-This path is intentionally guarded. It estimates the marker center/depth and
-the gripper-frame correction, but physical execution requires a local config
-with a measured gripper-tip offset and a verified eye-in-hand transform.
+This path is intentionally guarded.  Direct 3D gripper targeting requires a
+measured gripper-tip offset and verified eye-in-hand transform.  The separate
+continuous image/depth demo mode only uses a local camera-to-tip estimate for
+its image aim point and depth stop calculation; it does not create a target
+from the hand-eye transform.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import depth_
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import estimate_depth_touch_step
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import load_visual_servo_touch_config
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import quaternion_xyzw_to_matrix
+from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import remaining_tip_forward_distance_m
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import split_alignment_and_forward_steps
 
 
@@ -103,6 +106,8 @@ def _capture_estimate(config: Any) -> tuple[dict[str, Any], Any]:
         "handeye_source": config.handeye_source,
         "handeye_verified": config.handeye_verified,
         "gripper_tip_offset_source": config.gripper_tip_offset_source,
+        "camera_tip_offset_source": config.camera_tip_offset_source,
+        "camera_tip_offset_camera_xyz_m": config.camera_tip_offset_camera_xyz_m,
         "estimate": estimate.as_dict(),
     }, estimate
 
@@ -205,18 +210,19 @@ def _lock_joint1_path_constraint(group: Any, config: Any) -> dict[str, Any]:
     }
 
 
-def _center_depth_m_from_msg(msg: Any, config: Any) -> float | None:
+def _depth_m_from_msg(msg: Any, config: Any, *, target_uv: tuple[float, float] | None = None) -> float | None:
     depth = _depth_to_array(msg)
+    u, v = target_uv or (float(msg.width) / 2.0, float(msg.height) / 2.0)
     return depth_roi_m(
         depth,
-        u=float(msg.width) / 2.0,
-        v=float(msg.height) / 2.0,
+        u=u,
+        v=v,
         encoding=str(msg.encoding),
         roi_px=config.depth_roi_px,
     )
 
 
-def _capture_center_depth(config: Any) -> dict[str, Any]:
+def _capture_center_depth(config: Any, *, target_uv: tuple[float, float] | None = None) -> dict[str, Any]:
     import rospy
     from sensor_msgs.msg import Image
 
@@ -228,12 +234,13 @@ def _capture_center_depth(config: Any) -> dict[str, Any]:
     return {
         "depth_topic": config.depth_image_topic,
         "depth_age_s": age_s,
-        "center_depth_m": _center_depth_m_from_msg(msg, config),
+        "center_depth_m": _depth_m_from_msg(msg, config, target_uv=target_uv),
+        "target_uv": list(target_uv) if target_uv else [float(msg.width) / 2.0, float(msg.height) / 2.0],
         "marker_required": False,
     }
 
 
-def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) -> dict[str, Any]:
+def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float, depth_target_uv: tuple[float, float] | None = None) -> dict[str, Any]:
     import rospy
     from sensor_msgs.msg import Image
 
@@ -250,7 +257,7 @@ def _execute_monitored_forward(group: Any, config: Any, *, distance_m: float) ->
         while not done_event.is_set() and not rospy.is_shutdown():
             try:
                 msg = rospy.wait_for_message(config.depth_image_topic, Image, timeout=max(0.05, config.max_depth_age_s))
-                depth_m = _center_depth_m_from_msg(msg, config)
+                depth_m = _depth_m_from_msg(msg, config, target_uv=depth_target_uv)
             except Exception as exc:
                 monitor["last_error"] = repr(exc)
                 continue
@@ -459,6 +466,7 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
     actions: list[dict[str, Any]] = []
     estimates: list[dict[str, Any]] = []
 
+    vertically_aligned = False
     for index in range(config.max_alignment_iterations):
         report, estimate = _capture_estimate(config)
         estimates.append(report)
@@ -470,6 +478,7 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
         vertical_error = float(estimate.pixel_error_uv[1])
         if abs(vertical_error) <= config.image_center_tolerance_px:
             actions.append({"name": "vertical_alignment_complete", "iteration": index, "pixel_error_uv": list(estimate.pixel_error_uv)})
+            vertically_aligned = True
             break
         vertical_step = config.simple_up_step_m if vertical_error < 0.0 else -config.simple_up_step_m
         action = _execute_world_delta(group, config, name=f"vertical_align_step_{index}", delta_world_m=[0.0, 0.0, vertical_step])
@@ -477,19 +486,36 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
         action["pixel_error_uv"] = list(estimate.pixel_error_uv)
         actions.append(action)
 
-    center_depth_report = _capture_center_depth(config)
+    if not vertically_aligned:
+        raise RuntimeError("vertical alignment did not reach the configured tip aim point; forward approach was not started")
+
+    depth_target_uv: tuple[float, float] | None = None
+    if estimates and estimates[-1]["estimate"].get("tip_alignment_uv"):
+        uv = estimates[-1]["estimate"]["tip_alignment_uv"]
+        depth_target_uv = (float(uv[0]), float(uv[1]))
+    center_depth_report = _capture_center_depth(config, target_uv=depth_target_uv)
     estimates.append({"forward_depth_precheck": center_depth_report})
     depth = float(center_depth_report["center_depth_m"] or 0.0)
     total_forward = 0.0
     while not rospy.is_shutdown():
-        center_depth_report = _capture_center_depth(config)
+        center_depth_report = _capture_center_depth(config, target_uv=depth_target_uv)
         estimates.append({"forward_depth": center_depth_report})
         depth = float(center_depth_report["center_depth_m"] or 0.0)
         if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
             actions.append({"name": "forward_stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
             break
-        forward_distance = max(config.simple_forward_step_m, depth + 0.05)
-        action = _execute_monitored_forward(group, config, distance_m=forward_distance)
+        remaining_distance = remaining_tip_forward_distance_m(
+            depth,
+            camera_tip_offset_camera_xyz_m=config.camera_tip_offset_camera_xyz_m,
+            contact_clearance_m=config.contact_clearance_m,
+        )
+        remaining_budget = max(0.0, config.continuous_max_forward_m - total_forward)
+        forward_distance = min(remaining_distance, remaining_budget)
+        if forward_distance <= 0.0:
+            actions.append({"name": "forward_stop_travel_limit_reached", "total_forward_m": total_forward, "remaining_tip_forward_m": remaining_distance})
+            break
+        action = _execute_monitored_forward(group, config, distance_m=forward_distance, depth_target_uv=depth_target_uv)
+        action["remaining_tip_forward_m_before_plan"] = remaining_distance
         actions.append(action)
         total_forward += float(action["planned_forward_distance_m"]) * float(action["cartesian_fraction"])
         if action.get("depth_stop_triggered"):

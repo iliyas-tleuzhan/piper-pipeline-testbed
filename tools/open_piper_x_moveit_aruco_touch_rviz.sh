@@ -30,6 +30,21 @@ docker exec -i "$CONTAINER" bash -lc "cat > '$STAGED_ROS_PKGS/agx_arm_descriptio
   <license>Proprietary</license>
 </package>
 XML"
+docker exec -i "$CONTAINER" bash -lc "python3 - <<'PY'
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+path = Path('$STAGED_ROS_PKGS/agx_arm_description/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro')
+tree = ET.parse(path)
+root = tree.getroot()
+if root.find(\"link[@name='gripper_tcp']\") is None:
+    ET.SubElement(root, 'link', {'name': 'gripper_tcp'})
+    joint = ET.SubElement(root, 'joint', {'name': 'gripper_tcp_joint', 'type': 'fixed'})
+    ET.SubElement(joint, 'origin', {'xyz': '0 0 0.138', 'rpy': '0 0 0'})
+    ET.SubElement(joint, 'parent', {'link': 'gripper_base'})
+    ET.SubElement(joint, 'child', {'link': 'gripper_tcp'})
+tree.write(path, encoding='unicode')
+PY"
 
 docker exec -it \
   -e DISPLAY="${DISPLAY:-:0}" \

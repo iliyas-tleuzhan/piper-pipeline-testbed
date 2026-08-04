@@ -58,6 +58,24 @@ else:
     raise SystemExit('joint3 not found in staged PiPER-X URDF')
 tree.write(path, encoding='unicode')
 PY
+python3 - <<PY
+from pathlib import Path
+import xml.etree.ElementTree as ET
+
+path = Path('$STAGED_ROS_PKGS/agx_arm_description/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro')
+tree = ET.parse(path)
+root = tree.getroot()
+if root.find("link[@name='gripper_tcp']") is None:
+    ET.SubElement(root, 'link', {'name': 'gripper_tcp'})
+    joint = ET.SubElement(root, 'joint', {'name': 'gripper_tcp_joint', 'type': 'fixed'})
+    ET.SubElement(joint, 'origin', {'xyz': '0 0 0.138', 'rpy': '0 0 0'})
+    ET.SubElement(joint, 'parent', {'link': 'gripper_base'})
+    ET.SubElement(joint, 'child', {'link': 'gripper_tcp'})
+    print('Added gripper_tcp: gripper_base -> gripper_tcp = [0, 0, 0.138] m')
+else:
+    print('gripper_tcp already exists in staged PiPER-X xacro; leaving it unchanged')
+tree.write(path, encoding='unicode')
+PY
 sha256sum '$STAGED_ROS_PKGS/agx_arm_description/agx_arm_urdf/piper_x/urdf/piper_x_with_gripper_description.xacro'"
 
 docker exec -i "$CONTAINER" bash -lc 'ip link set can0 down >/dev/null 2>&1 || true; ip link set can0 type can bitrate 1000000 >/dev/null 2>&1 || true; ip link set can0 txqueuelen 1000 >/dev/null 2>&1 || true; ip link set can0 up >/dev/null 2>&1 || true'

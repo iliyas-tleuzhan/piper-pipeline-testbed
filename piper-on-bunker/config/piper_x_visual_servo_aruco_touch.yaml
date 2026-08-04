@@ -34,12 +34,6 @@ gripper:
   # Contact tip location expressed in gripper_base coordinates.
   tip_offset_from_gripper_base_xyz_m: [0.0, 0.0, 0.0]
 
-demo:
-  # D435i optical frame: +X right, +Y down, +Z forward. This is a local
-  # visual/depth demo estimate only; it is not a hand-eye calibration or TCP.
-  camera_to_tip_offset_source: UNMEASURED_LOCAL_VALUE_REQUIRED
-  camera_to_tip_offset_camera_xyz_m: [0.0, 0.0, 0.0]
-
 depth:
   roi_px: 7
   min_depth_m: 0.030

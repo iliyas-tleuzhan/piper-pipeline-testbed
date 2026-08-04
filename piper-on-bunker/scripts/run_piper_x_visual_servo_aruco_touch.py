@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Plan/report a PiPER-X wrist-depth ArUco alignment touch step.
 
-This path is intentionally guarded.  Direct 3D gripper targeting requires a
-measured gripper-tip offset and verified eye-in-hand transform.  The separate
-continuous image/depth demo mode only uses a local camera-to-tip estimate for
-its image aim point and depth stop calculation; it does not create a target
-from the hand-eye transform.
+This path is intentionally guarded. It estimates the marker center/depth and
+the gripper-frame correction, but physical execution requires a local config
+with a measured gripper-tip offset and a verified eye-in-hand transform.
 """
 
 from __future__ import annotations
@@ -29,7 +27,6 @@ from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import depth_
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import estimate_depth_touch_step
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import load_visual_servo_touch_config
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import quaternion_xyzw_to_matrix
-from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import remaining_tip_forward_distance_m
 from piper_on_bunker.manipulation.piper_x_visual_servo_aruco_touch import split_alignment_and_forward_steps
 
 
@@ -106,8 +103,6 @@ def _capture_estimate(config: Any) -> tuple[dict[str, Any], Any]:
         "handeye_source": config.handeye_source,
         "handeye_verified": config.handeye_verified,
         "gripper_tip_offset_source": config.gripper_tip_offset_source,
-        "camera_tip_offset_source": config.camera_tip_offset_source,
-        "camera_tip_offset_camera_xyz_m": config.camera_tip_offset_camera_xyz_m,
         "estimate": estimate.as_dict(),
     }, estimate
 
@@ -490,9 +485,6 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
         raise RuntimeError("vertical alignment did not reach the configured tip aim point; forward approach was not started")
 
     depth_target_uv: tuple[float, float] | None = None
-    if estimates and estimates[-1]["estimate"].get("tip_alignment_uv"):
-        uv = estimates[-1]["estimate"]["tip_alignment_uv"]
-        depth_target_uv = (float(uv[0]), float(uv[1]))
     center_depth_report = _capture_center_depth(config, target_uv=depth_target_uv)
     estimates.append({"forward_depth_precheck": center_depth_report})
     depth = float(center_depth_report["center_depth_m"] or 0.0)
@@ -504,18 +496,14 @@ def _live_continuous_simple_up_forward(config_path: str, confirm: str) -> dict[s
         if depth > 0.0 and depth <= config.continuous_forward_stop_depth_m:
             actions.append({"name": "forward_stop_depth_reached", "depth_m": depth, "total_forward_m": total_forward})
             break
-        remaining_distance = remaining_tip_forward_distance_m(
-            depth,
-            camera_tip_offset_camera_xyz_m=config.camera_tip_offset_camera_xyz_m,
-            contact_clearance_m=config.contact_clearance_m,
-        )
+        remaining_distance = max(0.0, depth - config.contact_clearance_m)
         remaining_budget = max(0.0, config.continuous_max_forward_m - total_forward)
         forward_distance = min(remaining_distance, remaining_budget)
         if forward_distance <= 0.0:
-            actions.append({"name": "forward_stop_travel_limit_reached", "total_forward_m": total_forward, "remaining_tip_forward_m": remaining_distance})
+            actions.append({"name": "forward_stop_travel_limit_reached", "total_forward_m": total_forward, "remaining_forward_m": remaining_distance})
             break
         action = _execute_monitored_forward(group, config, distance_m=forward_distance, depth_target_uv=depth_target_uv)
-        action["remaining_tip_forward_m_before_plan"] = remaining_distance
+        action["remaining_forward_m_before_plan"] = remaining_distance
         actions.append(action)
         total_forward += float(action["planned_forward_distance_m"]) * float(action["cartesian_fraction"])
         if action.get("depth_stop_triggered"):

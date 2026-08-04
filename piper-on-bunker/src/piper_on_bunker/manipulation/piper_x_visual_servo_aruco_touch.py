@@ -39,8 +39,6 @@ class VisualServoTouchConfig:
     handeye_source: str
     gripper_tip_offset_xyz_m: list[float]
     gripper_tip_offset_source: str
-    camera_tip_offset_camera_xyz_m: list[float]
-    camera_tip_offset_source: str
     max_image_age_s: float
     max_depth_age_s: float
     max_joint_state_age_s: float
@@ -72,7 +70,6 @@ class VisualServoTouchConfig:
         frames = data["frames"]
         handeye = data["handeye"]
         gripper = data["gripper"]
-        demo = data.get("demo", {})
         safety = data["safety"]
         depth = data["depth"]
         align = data["alignment"]
@@ -96,8 +93,6 @@ class VisualServoTouchConfig:
             handeye_source=str(handeye.get("source", "unverified_local_config")),
             gripper_tip_offset_xyz_m=[float(v) for v in gripper["tip_offset_from_gripper_base_xyz_m"]],
             gripper_tip_offset_source=str(gripper.get("tip_offset_source", "unverified_local_config")),
-            camera_tip_offset_camera_xyz_m=[float(v) for v in demo.get("camera_to_tip_offset_camera_xyz_m", [0.0, 0.0, 0.0])],
-            camera_tip_offset_source=str(demo.get("camera_to_tip_offset_source", "UNMEASURED_LOCAL_VALUE_REQUIRED")),
             max_image_age_s=float(safety["max_image_age_s"]),
             max_depth_age_s=float(safety["max_depth_age_s"]),
             max_joint_state_age_s=float(safety["max_joint_state_age_s"]),
@@ -129,7 +124,6 @@ class DepthTouchEstimate:
     reason: str | None
     marker_center_uv: tuple[float, float] | None
     image_center_uv: tuple[float, float]
-    tip_alignment_uv: tuple[float, float] | None
     pixel_error_uv: tuple[float, float] | None
     depth_m: float | None
     marker_point_camera_m: list[float] | None
@@ -147,7 +141,6 @@ class DepthTouchEstimate:
             "reason": self.reason,
             "marker_center_uv": list(self.marker_center_uv) if self.marker_center_uv else None,
             "image_center_uv": list(self.image_center_uv),
-            "tip_alignment_uv": list(self.tip_alignment_uv) if self.tip_alignment_uv else None,
             "pixel_error_uv": list(self.pixel_error_uv) if self.pixel_error_uv else None,
             "depth_m": self.depth_m,
             "marker_point_camera_m": self.marker_point_camera_m,
@@ -205,42 +198,6 @@ def deproject_pixel(camera_matrix: Any, *, u: float, v: float, depth_m: float) -
         raise ValueError("camera matrix contains invalid focal length")
     z = float(depth_m)
     return [float((u - cx) * z / fx), float((v - cy) * z / fy), z]
-
-
-def camera_tip_alignment_uv(
-    camera_matrix: Any,
-    *,
-    marker_depth_m: float,
-    camera_tip_offset_camera_xyz_m: list[float],
-) -> tuple[float, float]:
-    """Project the tip's lateral camera offset onto the marker depth plane.
-
-    D435i optical coordinates use +X right, +Y down and +Z forward.  This is
-    deliberately a local image/depth demo aid, not an eye-on-hand transform.
-    """
-    if marker_depth_m <= 0.0 or not math.isfinite(marker_depth_m):
-        raise ValueError("marker depth must be finite and positive")
-    if len(camera_tip_offset_camera_xyz_m) != 3 or not all(math.isfinite(v) for v in camera_tip_offset_camera_xyz_m):
-        raise ValueError("camera-to-tip offset must contain three finite values")
-    matrix = np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3)
-    fx, fy = float(matrix[0, 0]), float(matrix[1, 1])
-    cx, cy = float(matrix[0, 2]), float(matrix[1, 2])
-    if fx <= 0.0 or fy <= 0.0:
-        raise ValueError("camera matrix contains invalid focal length")
-    offset_x, offset_y, _ = [float(v) for v in camera_tip_offset_camera_xyz_m]
-    return (cx + fx * offset_x / marker_depth_m, cy + fy * offset_y / marker_depth_m)
-
-
-def remaining_tip_forward_distance_m(
-    marker_depth_m: float,
-    *,
-    camera_tip_offset_camera_xyz_m: list[float],
-    contact_clearance_m: float,
-) -> float:
-    """Approximate camera-optical forward distance left for the contact tip."""
-    if len(camera_tip_offset_camera_xyz_m) != 3 or not all(math.isfinite(v) for v in camera_tip_offset_camera_xyz_m):
-        raise ValueError("camera-to-tip offset must contain three finite values")
-    return max(0.0, float(marker_depth_m) - float(camera_tip_offset_camera_xyz_m[2]) - float(contact_clearance_m))
 
 
 def quaternion_xyzw_to_matrix(quaternion_xyzw: list[float]) -> np.ndarray:
@@ -317,7 +274,6 @@ def estimate_depth_touch_step(
             None,
             None,
             None,
-            None,
             list(config.gripper_tip_offset_xyz_m),
             None,
             None,
@@ -336,15 +292,7 @@ def estimate_depth_touch_step(
         blockers.append("no valid aligned depth at marker center")
     elif depth_m < config.min_depth_m or depth_m > config.max_depth_m:
         blockers.append(f"marker depth {depth_m:.3f} m outside [{config.min_depth_m:.3f}, {config.max_depth_m:.3f}]")
-    tip_alignment_uv = None
-    if depth_m is not None:
-        tip_alignment_uv = camera_tip_alignment_uv(
-            camera_matrix,
-            marker_depth_m=depth_m,
-            camera_tip_offset_camera_xyz_m=config.camera_tip_offset_camera_xyz_m,
-        )
-    alignment_target = tip_alignment_uv or image_center
-    pixel_error = (float(result.center_uv[0] - alignment_target[0]), float(result.center_uv[1] - alignment_target[1]))
+    pixel_error = (float(result.center_uv[0] - image_center[0]), float(result.center_uv[1] - image_center[1]))
     image_aligned = abs(pixel_error[0]) <= config.image_center_tolerance_px and abs(pixel_error[1]) <= config.image_center_tolerance_px
     if not image_aligned:
         blockers.append("marker is not centered in wrist image")
@@ -380,7 +328,6 @@ def estimate_depth_touch_step(
         None,
         result.center_uv,
         image_center,
-        tip_alignment_uv,
         pixel_error,
         depth_m,
         point_camera,
